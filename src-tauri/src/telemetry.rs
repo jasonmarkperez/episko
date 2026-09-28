@@ -235,6 +235,38 @@ pub(crate) fn write_instrument_settings(port: u16, session_id: &str) -> std::io:
     Ok(path.to_string_lossy().to_string())
 }
 
+/// The per-launch instrument for a provider whose own extension system carries it. The
+/// asset is compiled in; only the port and our stable id are substituted, so a launch
+/// mutates nothing global. Claude keeps `write_instrument_settings`; this is its sibling.
+pub(crate) fn write_instrument(
+    provider: &str,
+    port: u16,
+    session_id: &str,
+) -> std::io::Result<Vec<String>> {
+    let (template, ext, flag) = match provider {
+        "omp" => (
+            include_str!("../../src/providers/instrument/omp.ts"),
+            "ts",
+            "-e",
+        ),
+        other => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("no instrument asset for provider {other}"),
+            ))
+        }
+    };
+    let mut dir = std::env::temp_dir();
+    dir.push("cc-launcher");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{provider}-{session_id}.{ext}"));
+    let body = template
+        .replace("__EPISKO_PORT__", &port.to_string())
+        .replace("__EPISKO_SID__", session_id);
+    std::fs::write(&path, body)?;
+    Ok(vec![flag.to_string(), path.to_string_lossy().to_string()])
+}
+
 /// Answer a held-open PermissionRequest. behavior = "allow" | "deny" | "terminal"
 /// ("terminal" returns 204 so Claude falls back to its own in-terminal prompt).
 #[tauri::command]
@@ -986,5 +1018,30 @@ mod tests {
         assert_eq!(ev["method"], "agent_start");
         assert_eq!(ev["params"]["k"], 1);
         assert!(ev["requestId"].is_null());
+    }
+
+    /// The shim is materialized per launch with the port and stable id substituted, and the
+    /// returned args are what loads it. No placeholder may survive into the written file.
+    #[test]
+    fn write_instrument_substitutes_and_returns_launch_args() {
+        let sid = "sid-omp-1";
+        let args = write_instrument("omp", 45678, sid).expect("shim should be written");
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-e");
+        assert!(args[1].ends_with(&format!("omp-{sid}.ts")), "unexpected path {}", args[1]);
+
+        let body = std::fs::read_to_string(&args[1]).unwrap();
+        assert!(body.contains("45678"), "port not substituted");
+        assert!(body.contains(sid), "session id not substituted");
+        assert!(!body.contains("__EPISKO_PORT__"), "port placeholder survived");
+        assert!(!body.contains("__EPISKO_SID__"), "sid placeholder survived");
+
+        let _ = std::fs::remove_file(&args[1]);
+    }
+
+    /// An unknown provider has no asset, and must not write a file or invent arguments.
+    #[test]
+    fn write_instrument_rejects_unknown_provider() {
+        assert!(write_instrument("nope", 45678, "sid").is_err());
     }
 }
