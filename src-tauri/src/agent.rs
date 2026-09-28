@@ -827,6 +827,26 @@ pub(crate) fn start_provider(
                 launch.mode,
             ))
         }
+        // No sidecar: the shim reports into the telemetry server we already run, so there is
+        // no runtime to register and nothing for stop_runtime to tear down.
+        "omp" => {
+            let mut args = crate::telemetry::write_instrument(
+                "omp",
+                state.port.load(std::sync::atomic::Ordering::Relaxed),
+                launch.session_id,
+            )
+            .map_err(|e| format!("write OMP instrument: {e}"))?;
+            args.extend(
+                omp_permission_args(launch.mode)
+                    .iter()
+                    .map(|a| (*a).to_string()),
+            );
+            args.extend(["--cwd".to_string(), launch.workdir.to_string()]);
+            if let Some(id) = launch.resume {
+                args.extend(["--resume".to_string(), id.to_string()]);
+            }
+            Ok(args)
+        }
         _ => Ok(Vec::new()),
     }
 }
@@ -849,6 +869,21 @@ fn codex_permission_args(mode: Option<&str>) -> &'static [&'static str] {
         Some("bypass") => &["--dangerously-bypass-approvals-and-sandbox"],
         Some(other) => {
             log::warn!("ignoring unknown Codex permission mode {other:?} — using config");
+            &[]
+        }
+    }
+}
+
+/// Whitelist from Episko's mode ids to OMP's three approval modes; the id itself never
+/// becomes an argument, and an unknown one degrades to OMP's own config.
+fn omp_permission_args(mode: Option<&str>) -> &'static [&'static str] {
+    match mode.map(str::trim) {
+        None | Some("") | Some("default") => &[],
+        Some("always-ask") => &["--approval-mode", "always-ask"],
+        Some("write") => &["--approval-mode", "write"],
+        Some("yolo") => &["--approval-mode", "yolo"],
+        Some(other) => {
+            log::warn!("ignoring unknown OMP permission mode {other:?} — using config");
             &[]
         }
     }
@@ -1060,6 +1095,30 @@ mod tests {
     }
 
     #[test]
+    fn omp_permission_args_whitelists_modes() {
+        assert_eq!(omp_permission_args(None), &[] as &[&str]);
+        assert_eq!(omp_permission_args(Some("")), &[] as &[&str]);
+        assert_eq!(omp_permission_args(Some("default")), &[] as &[&str]);
+        assert_eq!(
+            omp_permission_args(Some("always-ask")),
+            &["--approval-mode", "always-ask"]
+        );
+        assert_eq!(
+            omp_permission_args(Some("write")),
+            &["--approval-mode", "write"]
+        );
+        assert_eq!(
+            omp_permission_args(Some("yolo")),
+            &["--approval-mode", "yolo"]
+        );
+        // An unknown id must degrade to OMP's own config, never reach argv.
+        assert_eq!(
+            omp_permission_args(Some("--yolo; rm -rf /")),
+            &[] as &[&str]
+        );
+    }
+
+    #[test]
     fn maps_episko_permission_verbs_to_each_app_server_response_shape() {
         let params = json!({ "permissions": { "network": { "enabled": true } } });
         assert_eq!(
@@ -1128,7 +1187,10 @@ mod tests {
         assert!(a_scope.starts_with("codex:"));
         assert!(!a_scope.contains("example.com"));
         assert_eq!(account_scope(&json!({ "account": null })), None);
-        assert_eq!(account_scope(&json!({ "account": { "type": "apiKey" } })), None);
+        assert_eq!(
+            account_scope(&json!({ "account": { "type": "apiKey" } })),
+            None
+        );
         assert_eq!(
             account_scope(&json!({ "account": { "type": "chatgpt", "email": null } })),
             None
