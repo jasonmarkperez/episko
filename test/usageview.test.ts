@@ -85,8 +85,11 @@ describe("usagePanelHtml — per-pane rate-limit windows", () => {
     sessions.set("s1", fakeSess([{ usedPercent: 30, resetsAt: Math.floor(Date.now() / 1000) + 3600, windowMins: null }]));
     setActiveId("s1");
     const html = usagePanelHtml();
-    expect(html).toContain("Usage window");
-    expect(html).toMatch(/fc-tlel" style="width:0%"/);
+    // Scoped to the pane row itself: the Forecast block above it also emits a 0%-width
+    // track whenever rl.h5/d7 are null, which would pass this check for the wrong reason.
+    const paneHtml = html.slice(html.indexOf("Pane limits"));
+    expect(paneHtml).toContain("Usage window");
+    expect(paneHtml).toMatch(/fc-tlel" style="width:0%"/);
   });
 
   it("shows a level and reset time only — burn rate, projection and time-to-cap all stay dashed", () => {
