@@ -167,8 +167,11 @@ export interface AgentTokenUsage {
   // statusLine fills the legacy fields)
   total: AgentTokenBreakdown; last: AgentTokenBreakdown; contextWindow: number | null;
 }
+// Units are contract, not folklore: a provider that supplied milliseconds shipped a 20704143d countdown.
 export interface AgentRateLimit {
-  usedPercent: number; resetsAt: number | null; windowMins: number | null;
+  usedPercent: number;        // 0-100, not a 0-1 fraction; test/units.test.ts guards all three
+  resetsAt: number | null;    // epoch SECONDS (rl.ts compares reset * 1000 to Date.now())
+  windowMins: number | null;  // MINUTES (footer.ts passes windowMins * 60 as seconds)
 }
 // Providers can raise several at once, so Sess keeps a queue; the legacy scalars mirror its head.
 export interface PendingPermission {
