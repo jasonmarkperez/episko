@@ -93,12 +93,14 @@ function saveCost() {
   localStorage.setItem(COST_KEY, JSON.stringify(Object.fromEntries(map)));
 }
 
-function todosFrom(input: Record<string, any>): Todo[] {
-  const list = Array.isArray(input.list) ? input.list : [];
+// The todo tool's result carries the authoritative post-op state; the tool re-normalizes
+// (e.g. auto-promotes the next pending task) after every op, so this is read, not replayed.
+function todosFromDetails(details: unknown): Todo[] {
+  const phases = Array.isArray(obj(details).phases) ? obj(details).phases : [];
   const out: Todo[] = [];
-  for (const phase of list) {
-    for (const item of Array.isArray(obj(phase).items) ? obj(phase).items : []) {
-      out.push({ content: text(item), status: "pending" });
+  for (const phase of phases) {
+    for (const task of Array.isArray(obj(phase).tasks) ? obj(phase).tasks : []) {
+      out.push({ content: text(obj(task).content), status: text(obj(task).status, "pending") });
     }
   }
   return out;
@@ -144,21 +146,21 @@ export function ompEvents(event: ProviderEvent): AgentEvent[] {
       const input = obj(p.input);
       const pathArg = text(input.path ?? input.file_path);
       const arg = pathArg ? leaf(pathArg) : text(input.command ?? input.pattern);
-      const out: AgentEvent[] = [{
+      return [{
         type: "activity-started", id: text(p.toolCallId), tool,
         arg, input: clip(input), desc: "",
       }];
-      if (tool === "todo") out.push({ type: "plan", todos: todosFrom(input) });
-      return out;
     }
     case "tool_result": {
       const tool = text(p.toolName);
       const input = obj(p.input);
-      return [{
+      const out: AgentEvent[] = [{
         type: "activity-completed", id: text(p.toolCallId), tool,
         input: clip(input), inputData: input, output: clip(p.content),
         failed: p.isError === true, files: fileTouches(tool, input),
       }];
+      if (tool === "todo" && p.isError !== true) out.push({ type: "plan", todos: todosFromDetails(p.details) });
+      return out;
     }
     case "message_end": {
       const message = obj(p.message);

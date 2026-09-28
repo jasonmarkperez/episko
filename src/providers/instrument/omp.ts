@@ -38,7 +38,7 @@ export default function episko(pi: any): void {
   }));
   pi.on("tool_result", (event: any) => post("tool_result", {
     toolCallId: event?.toolCallId, toolName: event?.toolName, input: event?.input ?? {},
-    content: event?.content ?? [], isError: event?.isError === true,
+    content: event?.content ?? [], isError: event?.isError === true, details: event?.details ?? null,
   }));
   pi.on("message_end", (event: any) => post("message_end", { message: event?.message ?? null }));
   pi.on("tool_approval_requested", (event: any) => post("tool_approval_requested", { toolName: event?.toolName }));

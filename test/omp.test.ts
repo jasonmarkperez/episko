@@ -72,12 +72,56 @@ describe("ompEvents", () => {
     expect(out[0].type === "activity-completed" && out[0].files).toEqual([]);
   });
 
-  it("reads todos off the todo tool's own call", () => {
-    const out = ev("tool_call", {
+  it("maps a todo result's phases to a plan, not the call's raw op", () => {
+    const out = ev("tool_result", {
       toolCallId: "t5", toolName: "todo",
-      input: { list: [{ phase: "P", items: ["do a thing"] }] },
+      input: { op: "init", items: ["Read notes.md", "Write answer.md with number+1"] },
+      content: [], isError: false,
+      details: { phases: [{ name: "", tasks: [
+        { content: "Read notes.md", status: "in_progress" },
+        { content: "Write answer.md with number+1", status: "pending" },
+      ] }] },
     });
-    expect(kinds(out)).toContain("plan");
+    const plan = out.find((e) => e.type === "plan");
+    expect(plan && plan.type === "plan" && plan.todos).toEqual([
+      { content: "Read notes.md", status: "in_progress" },
+      { content: "Write answer.md with number+1", status: "pending" },
+    ]);
+  });
+
+  it("carries a done op's updated phases through to completed todos", () => {
+    const out = ev("tool_result", {
+      toolCallId: "t6", toolName: "todo",
+      input: { op: "done", task: "Read notes.md" },
+      content: [], isError: false,
+      details: { phases: [{ name: "", tasks: [
+        { content: "Read notes.md", status: "completed" },
+        { content: "Write answer.md with number+1", status: "completed" },
+      ] }] },
+    });
+    const plan = out.find((e) => e.type === "plan");
+    expect(plan && plan.type === "plan" && plan.todos).toEqual([
+      { content: "Read notes.md", status: "completed" },
+      { content: "Write answer.md with number+1", status: "completed" },
+    ]);
+  });
+
+  it("emits no plan for a failed todo call, since the tool discarded the mutation", () => {
+    const out = ev("tool_result", {
+      toolCallId: "t7", toolName: "todo",
+      input: { op: "done", task: "unknown task" },
+      content: [{ type: "text", text: "no such task" }], isError: true,
+      details: { phases: [] },
+    });
+    expect(kinds(out)).not.toContain("plan");
+  });
+
+  it("emits exactly one activity-completed and no plan for a non-todo tool_result", () => {
+    const out = ev("tool_result", {
+      toolCallId: "t8", toolName: "read", input: { path: "/repo/a.ts" },
+      content: [{ type: "text", text: "ok" }], isError: false,
+    });
+    expect(kinds(out)).toEqual(["activity-completed"]);
   });
 
   it("accumulates cost across messages in one session", () => {
