@@ -5,9 +5,10 @@
 
 import { esc, fmtClock, fmtMb, fmtRate, fmtSpan, fmtUntil, uDelta, uTok, uUsd, uUsd2 } from "./format";
 import { popGoHtml } from "./footerview";
-import { D7_LEN, forecast5h, forecast7d, H5_LEN, rlScoped, scopedForecasts, type Forecast } from "./rl";
-import { accentFor, ioAll, sessions } from "./state";
-import { hasAgentCapability } from "./types";
+import { D7_LEN, forecast5h, forecast7d, forecastWin, H5_LEN, rlScoped, scopedForecasts, type Forecast } from "./rl";
+import { accentFor, activeId, ioAll, sessions } from "./state";
+import { forecastsOwnLimits } from "./providers";
+import { hasAgentCapability, isAgent } from "./types";
 import {
   dayIo, ioDayCount, ioSameNote, ioTotal, modelSeries, todayKey, tokenDays, U_MONTHS, uBuckets,
   uDkey, uModels, usage, usageRange, usageWindow, uSum,
@@ -44,9 +45,9 @@ export function usageRow(label: string, sub: string, f: Forecast, note?: string)
     ? `resets ${fmtClock(f.resetTs)} · in ${fmtUntil(f.resetTs)}`
     : (f.used == null ? "no reading yet" : "no active window");
   return `<div class="up-row">
-    <div class="up-top"><span class="up-l">${label}</span><span class="up-sub">${sub}</span><span class="up-pct ${cls}">${pctTxt}</span></div>
+    <div class="up-top"><span class="up-l">${esc(label)}</span><span class="up-sub">${esc(sub)}</span><span class="up-pct ${cls}">${pctTxt}</span></div>
     <div class="up-bar ${cls}"><i class="up-fill" style="width:${usedW}%"></i><i class="up-ghost" style="left:${usedW}%;width:${ghostW}%"></i></div>
-    <div class="up-fore"><span>${note && f.used != null ? note : foreText(f)}</span>${verdictChip(f)}</div>
+    <div class="up-fore"><span>${note && f.used != null ? esc(note) : foreText(f)}</span>${verdictChip(f)}</div>
     <div class="up-reset">${resetTxt}</div>
   </div>`;
 }
@@ -266,17 +267,30 @@ function uProjects(): string {
     <table class="u-tbl"><thead><tr><th>Project</th><th class="u-num">Share</th><th class="u-num">Tokens</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
+// A window's name, in the one spelling every surface (footer segment, popup, this panel)
+// shares. `limitShort` is the compact form ("5h"/"7d"); `limitName` pairs it with the
+// popup's plain-language sub ("Session"/"5-hour window").
+export const limitShort = (mins: number | null): string => mins === 300 ? "5h"
+  : mins === 10080 ? "7d" : mins != null && mins % 1440 === 0 ? `${mins / 1440}d`
+    : mins != null && mins % 60 === 0 ? `${mins / 60}h` : mins != null ? `${mins}m` : "limit";
+export const limitName = (mins: number | null): [string, string] => mins === 300
+  ? ["Session", "5-hour window"] : mins === 10080 ? ["Weekly", "7-day window"]
+    : [limitShort(mins), "usage window"];
+
 // One window of the forecast card. Reads the same forecast() the footer and popup use.
-function fcWinHtml(name: string, sub: string, f: Forecast, burnPerHr: number | null, len: number, burnUnit: string, note?: string): string {
+function fcWinHtml(name: string, sub: string, f: Forecast, burnPerHr: number | null, len: number | null, burnUnit: string, note?: string): string {
   const cls = f.used == null ? "" : "s-" + f.status;
   const pctTxt = f.used == null ? "–" : Math.round(f.used) + "%";
   const usedW = f.used == null ? 0 : Math.min(100, Math.max(0, f.used));
   const projW = f.proj == null ? usedW : Math.min(100, Math.max(0, f.proj));
   const ghostW = Math.max(0, projW - usedW);
-  const elapsed = f.secLeft != null ? len - f.secLeft : 0;
-  const elapsedPct = Math.min(100, Math.max(0, elapsed / len * 100));
-  const outPct = (f.runsOut && f.etaSec != null && f.secLeft != null)
-    ? Math.min(100, Math.max(0, (elapsed + f.etaSec) / len * 100)) : null;
+  // A window of unknown or non-positive span draws no elapsed timeline rather than one
+  // measured against an invented length.
+  const span = len != null && len > 0 ? len : null;
+  const elapsed = span != null && f.secLeft != null ? span - f.secLeft : 0;
+  const elapsedPct = span != null ? Math.min(100, Math.max(0, elapsed / span * 100)) : 0;
+  const outPct = (span != null && f.runsOut && f.etaSec != null && f.secLeft != null)
+    ? Math.min(100, Math.max(0, (elapsed + f.etaSec) / span * 100)) : null;
   const vc = verdictChip(f);
   const verdict = (f.used != null && f.used >= 100) ? `<span class="vchip s-bad">at cap</span>`
     : vc || `<span class="vchip s-mut">level only</span>`;
@@ -338,6 +352,29 @@ function scopedBlockHtml(): string {
       ${wins.map((w) => fcWinHtml(esc(w.label), "weekly · this model", w.forecast, null, D7_LEN, "%/day", note)).join("")}
     </div>`;
 }
+// Codex/OMP report windows scoped to one pane, not the account. Two windows can share a span
+// (an account-wide 7-day window and a per-model 7-day window), which is why `label` wins when
+// a provider supplies one; a single reading has no slope behind it, so this is a level and
+// reset time only — never a forecast, matching docs/providers.md.
+function paneLimitsBlockHtml(): string {
+  const s = activeId ? sessions.get(activeId) : null;
+  // A provider whose adapter forecasts its own windows (Claude) is already metered above,
+  // from the same s.rateLimits mirror (phase.ts) — footer.ts's selectedLimits makes the identical split.
+  if (!s || !isAgent(s) || !hasAgentCapability(s, "usage") || forecastsOwnLimits(s.provider ?? "")) return "";
+  const wins = s.rateLimits;
+  if (!wins.length) return "";
+  const note = "Reported by this pane, not the account. A single reading carries no pace, so this is the level only.";
+  return `<div class="fc-block">
+    <div class="label" style="margin-top:15px">Pane limits <span class="fc-hint">· this pane's own rate-limit windows</span></div>
+    <div class="fc-grid">
+      ${wins.map((w) => {
+        const len = w.windowMins != null ? w.windowMins * 60 : null;
+        const name = w.label ? esc(w.label) : len != null && len > 0 ? limitName(w.windowMins)[0] : "Usage window";
+        return fcWinHtml(name, "this pane's window", forecastWin(w.usedPercent, w.resetsAt, null, len ?? undefined), null, len, "%/day", note);
+      }).join("")}
+    </div>
+  </div>`;
+}
 export function usagePanelHtml(): string {
   const ranges = USAGE_RANGES.map(([n, l]) => `<button class="u-rbtn${n === usageRange ? " on" : ""}" data-urange="${n}">${l}</button>`).join("");
   return `<div class="u-pane">
@@ -345,7 +382,7 @@ export function usagePanelHtml(): string {
       <p class="u-hint">Every session Episko launches, account-wide. History stays on this machine.</p></div>
       <div class="u-range">${ranges}</div></header>
     ${uTiles()}
-    ${forecastBlockHtml()}
+    ${forecastBlockHtml()}${paneLimitsBlockHtml()}
     ${uHeatmap()}
     <div class="u-cols">${uBars()}<section class="u-card">${uModelMix()}${uTokenMix()}</section></div>
     ${uProjects()}

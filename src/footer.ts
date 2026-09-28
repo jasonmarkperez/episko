@@ -10,7 +10,7 @@ import { abbr } from "./phase";
 import { forecastWin, type Forecast } from "./rl";
 import { refreshScopedLimits } from "./rlprobe";
 import { hasAgentCapability, isAgent, phaseText, statusKey, type AgentRateLimit, type Engine, type Sess } from "./types";
-import { costPopHtml, ioFigures, ioPopHtml, liveIo, usageRow } from "./usageview";
+import { costPopHtml, ioFigures, ioPopHtml, limitName, limitShort, liveIo, usageRow } from "./usageview";
 import { closeCafPop } from "./caffeinate";
 import { closeSignoffPop } from "./signoff";
 import { needsYouSessions, reactorLabel, reactorState } from "./grouping";
@@ -56,20 +56,19 @@ interface LimitWindowView extends AgentRateLimit { forecast: Forecast; label?: s
 interface SelectedLimits { id: string; label: string; forecast: boolean; reported: boolean; windows: LimitWindowView[] }
 
 const emptyForecast = (): Forecast => forecastWin(null, null, null);
-const limitShort = (mins: number | null): string => mins === 300 ? "5h"
-  : mins === 10080 ? "7d" : mins != null && mins % 1440 === 0 ? `${mins / 1440}d`
-    : mins != null && mins % 60 === 0 ? `${mins / 60}h` : mins != null ? `${mins}m` : "limit";
-const limitName = (mins: number | null): [string, string] => mins === 300
-  ? ["Session", "5-hour window"] : mins === 10080 ? ["Weekly", "7-day window"]
-    : [limitShort(mins), "usage window"];
 
 function selectedLimits(): SelectedLimits | null {
   const s = activeId ? sessions.get(activeId) : null;
   if (!s || !isAgent(s) || !hasAgentCapability(s, "usage")) return null;
   const adapter = providerAdapter(s.provider ?? "");
-  const specialized = adapter?.rateLimitForecasts?.();
-  const source = specialized?.length
-    ? specialized.map((window) => ({
+  // Computed once and reused: `adapter.rateLimitForecasts` walks rlSamples through every
+  // forecast (forecast5h/7d, scopedForecasts) — calling it twice per renderFoot tick, once
+  // just to read `.length` (forecastsOwnLimits) and again for the windows, doubled that cost
+  // on the app's hottest render path for no reason.
+  const own = adapter?.rateLimitForecasts?.();
+  const ownForecast = !!own?.length;
+  const source = ownForecast
+    ? own!.map((window) => ({
         usedPercent: window.forecast.used ?? 0, resetsAt: window.forecast.resetTs,
         windowMins: window.windowMins, forecast: window.forecast,
         label: window.label, sub: window.sub, note: window.note,
@@ -84,7 +83,7 @@ function selectedLimits(): SelectedLimits | null {
   return {
     id: adapter?.id ?? s.provider ?? "",
     label: adapter?.label ?? s.provider ?? "Agent",
-    forecast: !!specialized?.length,
+    forecast: ownForecast,
     reported: windows.some((window) => window.forecast.used != null),
     windows,
   };

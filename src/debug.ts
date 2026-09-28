@@ -103,6 +103,7 @@ export function dbgSnapshot() {
       id: s.id, project: s.project, phase: s.phase, attention: s.attention, model: s.model,
       ctxPct: s.ctxPct, cost: s.cost, durMs: s.durMs, subagents: liveCount(s),
       lastEvent: s.lastEvent, kind: s.kind, external: s.external, branch: s.branch, workdir: s.workdir,
+      resumeId: s.resumeId,
       fanout: dbgFanout(s),
       // Where writes actually land when that isn't `workdir`; the disagreement is what needs explaining.
       drift: s.drift ? `${s.drift.branch} @ ${s.drift.dir}` : null,

@@ -629,6 +629,12 @@ fn transcript_reader(
     tail: bool,
 ) -> Result<std::io::BufReader<std::fs::File>, String> {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
+    // The id is pasted into a filename: uuid characters only, so no `..` or separator
+    // can escape the projects tree — same rule as move_session_transcript_in, since a
+    // latched agent id (telemetry.rs) reaches here as `Sess.resumeId` after a reload.
+    if !crate::valid_session_id(session_id) {
+        return Err(format!("not a valid session id: {session_id}"));
+    }
     let path = project_transcript_dir(base, cwd).join(format!("{session_id}.jsonl"));
     let file = std::fs::File::open(&path).map_err(|e| format!("transcript not found: {e}"))?;
     let len = file.metadata().map_err(|e| e.to_string())?.len();
@@ -761,11 +767,7 @@ fn move_session_transcript_in(
 ) -> Result<String, String> {
     // The id is pasted into a filename: uuid characters only, so no `..` or separator can
     // escape the projects tree. Rejected, not sanitised: a sanitised id names the wrong file.
-    if session_id.is_empty()
-        || !session_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-    {
+    if !crate::valid_session_id(session_id) {
         return Err(format!("not a valid session id: {session_id}"));
     }
     let from_dir = project_transcript_dir(base, from_workdir);
@@ -1767,6 +1769,24 @@ mod tests {
         // No transcript is an error, not an empty mirror: the UI must tell "nothing was
         // said" from "there is no such session".
         assert!(read_transcript_in(&base, cwd, "no-such-session", 10).is_err());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Finding 3: before the alphabet check, an id reaching this reader was never validated —
+    /// after the telemetry latch (telemetry.rs), that id is attacker-influenced. A session id
+    /// of `../escaped` must not let the reader climb out of the project's transcript directory.
+    #[test]
+    fn read_transcript_rejects_a_session_id_that_climbs_out_of_the_project_dir() {
+        let cwd = "/Users/tim/dev/mirror";
+        let (base, proj) = fixture(cwd);
+        // One level above the project dir (`base/projects`): what `../escaped` resolves to
+        // if the reader trusts the join. Demonstrates an actual escape, not a coincidental
+        // "not found" from the wrong reason.
+        std::fs::write(proj.parent().unwrap().join("escaped.jsonl"), r#"{"type":"user","message":{"content":"leaked"}}"#).unwrap();
+
+        let result = read_transcript_in(&base, cwd, "../escaped", 10);
+        assert!(result.is_err(), "a session id outside the uuid alphabet must be rejected, not resolved");
 
         let _ = std::fs::remove_dir_all(&base);
     }

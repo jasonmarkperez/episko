@@ -25,6 +25,8 @@ const CLAUDE_PERMISSION_MODES: readonly AgentPermissionMode[] = [
 // wants a clock parses it and shows nothing when it is absent.
 export interface ProviderMessage { role: string; text: string; at?: string | null }
 
+// `list`, `read` and `reconcile` are required. `asked` is an optional quality
+// improvement: without it a caller falls back to `read`, which answers with a tail.
 export interface ProviderHistory {
   list(limit: number): Promise<HistEntry[]>;
   read(sessionId: string, cwd: string, limit: number): Promise<ProviderMessage[]>;
@@ -130,6 +132,12 @@ export const PROVIDER_ADAPTERS: readonly AgentProviderAdapter[] = [
 const PROVIDERS = new Map(PROVIDER_ADAPTERS.map((provider) => [provider.id, provider]));
 
 export const providerAdapter = (id: string) => PROVIDERS.get(id);
+
+// The one boundary check for "does this provider already forecast its own windows" (Claude
+// today): callers must not also render a client-computed forecast for the same data.
+export function forecastsOwnLimits(provider: string): boolean {
+  return !!providerAdapter(provider)?.rateLimitForecasts?.()?.length;
+}
 
 export function providerPermissionMode(provider: string, id: string): AgentPermissionMode | null {
   const modes = providerAdapter(provider)?.permissionModes;

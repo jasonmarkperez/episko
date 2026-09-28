@@ -173,6 +173,7 @@ pub(crate) fn spawn_claude(
             workdir,
             kind: "agent",
             provider: Some("claude".into()),
+            resume_id: None,
             scrollback: scroll.clone(),
             win32_input: win32.clone(),
         },
@@ -451,6 +452,7 @@ pub(crate) fn spawn_shell(
             workdir,
             kind: "shell",
             provider: None,
+            resume_id: None,
             scrollback: scroll.clone(),
             win32_input: win32.clone(),
         },
@@ -623,6 +625,7 @@ pub(crate) fn spawn_task(
             workdir,
             kind: "task",
             provider: None,
+            resume_id: None,
             scrollback: scroll.clone(),
             win32_input: win32.clone(),
         },
@@ -957,6 +960,7 @@ pub(crate) fn spawn_agent(
             workdir,
             kind: "agent",
             provider: Some(spec.id.into()),
+            resume_id: None,
             scrollback: scroll.clone(),
             win32_input: win32.clone(),
         },
@@ -1277,6 +1281,7 @@ pub(crate) struct LiveSession {
     kind: &'static str,
     provider: Option<String>,
     workdir: String,
+    resume_id: Option<String>,
 }
 
 /// Every embedded PTY the backend holds. Exists for the one state where the frontend map
@@ -1294,6 +1299,7 @@ pub(crate) fn live_sessions(state: State<AppState>) -> Vec<LiveSession> {
             kind: s.kind,
             provider: s.provider.clone(),
             workdir: s.workdir.clone(),
+            resume_id: s.resume_id.clone(),
         })
         .collect()
 }

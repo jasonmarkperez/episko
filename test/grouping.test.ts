@@ -12,7 +12,7 @@ import {
 } from "../src/state";
 import { ATTN_DEFAULTS } from "../src/attn";
 import {
-  adoptIdentity,
+  adoptIdentity, adoptResumeId,
   allProjects, attnPending, checkoutOf, clusterByWorktree, clusterIsLive, dashHeads, dormantBusy,
   foldRunGroups, inStageGroup, splitAnchorFor, splitShells, stageKeyOf,
   groupedProjects, groupPhase, groupSummary, needsYou, needsYouSessions,
@@ -1375,8 +1375,8 @@ describe("dormantBusy — a live session must not be offered for restore", () =>
 });
 
 describe("orphanAdoptions — which reload orphans get a pane rebuilt (#47)", () => {
-  const live = (o: Partial<{ id: string; kind: string; provider: string | null; workdir: string }> = {}) =>
-    ({ id: "o1", kind: "agent", provider: "claude", workdir: "/w/epi", ...o });
+  const live = (o: Partial<{ id: string; kind: string; provider: string | null; workdir: string; resume_id: string | null }> = {}) =>
+    ({ id: "o1", kind: "agent", provider: "claude", workdir: "/w/epi", resume_id: null, ...o });
 
   it("adopts a claude orphan under its roster identity", () => {
     const out = orphanAdoptions([live()], [dorm({ id: "o1", resumeId: "rot", project: "Epi!" })]);
@@ -1389,7 +1389,12 @@ describe("orphanAdoptions — which reload orphans get a pane rebuilt (#47)", ()
   it("still adopts an orphan the roster forgot, with meta null", () => {
     // A running conversation is worth more than a tidy label; the caller derives one from the workdir.
     const out = orphanAdoptions([live()], []);
-    expect(out).toEqual([{ id: "o1", workdir: "/w/epi", provider: "claude", meta: null }]);
+    expect(out).toEqual([{ id: "o1", workdir: "/w/epi", provider: "claude", resumeId: null, meta: null }]);
+  });
+
+  it("passes the backend's latched conversation id through untouched", () => {
+    const out = orphanAdoptions([live({ resume_id: "conv-123" })], []);
+    expect(out[0]?.resumeId).toBe("conv-123");
   });
 
   it("reattaches an integrated Codex pane with its provider identity", () => {
@@ -1405,6 +1410,22 @@ describe("orphanAdoptions — which reload orphans get a pane rebuilt (#47)", ()
   it("never adopts a pane the frontend already has", () => {
     open(sess({ id: "o1" }));
     expect(orphanAdoptions([live()], [])).toEqual([]);
+  });
+});
+
+describe("adoptResumeId — which id an adopted pane resumes under", () => {
+  it("prefers the backend's latch when there is no roster row — the reload-loses-the-id bug", () => {
+    // Broken before task 5: a provider with no roster row (never claimed `resume`, or not
+    // yet saved) fell all the way to the pane id, discarding the real conversation.
+    expect(adoptResumeId("conv-123", null, "pane-1")).toBe("conv-123");
+  });
+
+  it("falls back to the roster row when the backend never latched one", () => {
+    expect(adoptResumeId(null, dorm({ resumeId: "rot" }), "pane-1")).toBe("rot");
+  });
+
+  it("falls back to the pane id only when neither backend nor roster has one", () => {
+    expect(adoptResumeId(null, null, "pane-1")).toBe("pane-1");
   });
 });
 
