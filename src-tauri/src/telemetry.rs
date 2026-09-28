@@ -133,6 +133,22 @@ pub(crate) fn run_telemetry_server<R: Runtime>(server: tiny_http::Server, app: A
             continue; // do NOT respond — resolve_permission will
         }
 
+        // An instrumented CLI's raw vendor event. Same payload agent.rs emits for Codex, so
+        // main.ts routes both through the provider registry with no second path.
+        if url.contains("agent") {
+            let _ = app.emit(
+                "agent-event",
+                serde_json::json!({
+                    "sessionId": stable_sid.clone().unwrap_or_default(),
+                    "provider": data.get("provider").cloned().unwrap_or(serde_json::Value::Null),
+                    "method": data.get("method").cloned().unwrap_or(serde_json::Value::Null),
+                    "params": data.get("params").cloned().unwrap_or(serde_json::Value::Null),
+                    "requestId": serde_json::Value::Null,
+                }),
+            );
+            let _ = request.respond(tiny_http::Response::from_string(""));
+            continue;
+        }
         let kind = if url.contains("statusline") { "statusline" } else { "hook" };
         let _ = app.emit("telemetry", serde_json::json!({ "kind": kind, "data": data }));
         let _ = request.respond(tiny_http::Response::from_string(""));
@@ -217,6 +233,50 @@ pub(crate) fn write_instrument_settings(port: u16, session_id: &str) -> std::io:
     let path = dir.join(format!("instrument-{session_id}.json"));
     std::fs::write(&path, serde_json::to_string_pretty(&settings)?)?;
     Ok(path.to_string_lossy().to_string())
+}
+
+/// The per-launch instrument for a provider whose own extension system carries it. The
+/// asset is compiled in; only the port and our stable id are substituted, so a launch
+/// mutates nothing global. Claude keeps `write_instrument_settings`; this is its sibling.
+pub(crate) fn write_instrument(
+    provider: &str,
+    port: u16,
+    session_id: &str,
+) -> std::io::Result<Vec<String>> {
+    // Pasted into a filename and into an executed TS literal: uuid characters only, so
+    // neither `../` nor a closing quote can reach the filesystem or the interpreter.
+    if session_id.is_empty()
+        || !session_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("not a valid session id: {session_id}"),
+        ));
+    }
+    let (template, ext, flag) = match provider {
+        "omp" => (
+            include_str!("../../src/providers/instrument/omp.ts"),
+            "ts",
+            "-e",
+        ),
+        other => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("no instrument asset for provider {other}"),
+            ))
+        }
+    };
+    let mut dir = std::env::temp_dir();
+    dir.push("cc-launcher");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{provider}-{session_id}.{ext}"));
+    let body = template
+        .replace("__EPISKO_PORT__", &port.to_string())
+        .replace("__EPISKO_SID__", session_id);
+    std::fs::write(&path, body)?;
+    Ok(vec![flag.to_string(), path.to_string_lossy().to_string()])
 }
 
 /// Answer a held-open PermissionRequest. behavior = "allow" | "deny" | "terminal"
@@ -935,5 +995,136 @@ mod tests {
         let _ = std::fs::remove_file(&settings);
         let _ = std::fs::remove_dir_all(&cwd);
         // The transcript stays: deleting inside ~/.claude/projects is not this test's job.
+    }
+
+    /// An instrumented CLI posts raw vendor events; the route re-emits them in the same
+    /// shape agent.rs emits for Codex, so the frontend router needs no second path.
+    #[test]
+    fn agent_route_emits_provider_events() {
+        use tauri::Listener;
+        let (app, port) = mock_telemetry_app();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.listen("agent-event", move |e| {
+            let _ = tx.send(e.payload().to_string());
+        });
+        let next = || -> serde_json::Value {
+            let raw = rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("server emitted no agent-event");
+            serde_json::from_str(&raw).expect("event payload should be json")
+        };
+        let wait = std::time::Duration::from_secs(5);
+
+        read_response(
+            open_post(
+                port,
+                "/agent",
+                &[("X-CC-Session", "ours-abc")],
+                r#"{"provider":"omp","method":"agent_start","params":{"k":1}}"#,
+            ),
+            wait,
+        );
+        let ev = next();
+        assert_eq!(ev["sessionId"], "ours-abc");
+        assert_eq!(ev["provider"], "omp");
+        assert_eq!(ev["method"], "agent_start");
+        assert_eq!(ev["params"]["k"], 1);
+        assert!(ev["requestId"].is_null());
+    }
+
+    /// Executed, never read: a test that inspects the generated shim agrees with our intent,
+    /// and the intent is what breaks. Zero model tokens — rpc mode reaches session_start
+    /// without a provider turn. Skips where omp is not installed.
+    #[test]
+    fn omp_shim_posts_agent_events() {
+        use tauri::Listener;
+        let Some(bin) = crate::pty::resolve_cli("omp") else {
+            eprintln!("omp_shim_posts_agent_events: SKIPPED (omp not found on PATH)");
+            return;
+        };
+        let (app, port) = mock_telemetry_app();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.listen("agent-event", move |e| {
+            let _ = tx.send(e.payload().to_string());
+        });
+        let next = || -> serde_json::Value {
+            let raw = rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("server emitted no agent-event");
+            serde_json::from_str(&raw).expect("event payload should be json")
+        };
+
+        let sid = format!("test-{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst));
+        let args = write_instrument("omp", port, &sid).expect("shim");
+
+        let child = std::process::Command::new(&bin)
+            .args(["--mode", "rpc", "--no-ui", "--no-session"])
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("omp failed to start");
+        // Reaps on every exit path, including a panicking assertion below: an omp that
+        // never exits on stdin EOF must not be orphaned just because the test failed.
+        struct Reap(std::process::Child, String);
+        impl Drop for Reap {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+                let _ = std::fs::remove_file(&self.1);
+            }
+        }
+        let _reap = Reap(child, args[1].clone());
+
+        let ev = next();
+        assert_eq!(ev["sessionId"], sid, "the stable launch id must ride the header");
+        assert_eq!(ev["provider"], "omp");
+        assert_eq!(ev["method"], "session_start");
+        assert!(
+            ev["params"]["context"]["contextWindow"].as_u64().unwrap_or(0) > 0,
+            "expected a positive contextWindow in {ev}"
+        );
+    }
+
+    /// The shim is materialized per launch with the port and stable id substituted, and the
+    /// returned args are what loads it. No placeholder may survive into the written file.
+    #[test]
+    fn write_instrument_substitutes_and_returns_launch_args() {
+        let sid = "sid-omp-1";
+        let args = write_instrument("omp", 45678, sid).expect("shim should be written");
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-e");
+        assert!(args[1].ends_with(&format!("omp-{sid}.ts")), "unexpected path {}", args[1]);
+
+        let body = std::fs::read_to_string(&args[1]).unwrap();
+        assert!(body.contains("45678"), "port not substituted");
+        assert!(body.contains(sid), "session id not substituted");
+        assert!(!body.contains("__EPISKO_PORT__"), "port placeholder survived");
+        assert!(!body.contains("__EPISKO_SID__"), "sid placeholder survived");
+
+        let _ = std::fs::remove_file(&args[1]);
+    }
+
+    /// An unknown provider has no asset, and must not write a file or invent arguments.
+    #[test]
+    fn write_instrument_rejects_unknown_provider() {
+        assert!(write_instrument("nope", 45678, "sid").is_err());
+    }
+
+    /// `../` would escape `cc-launcher`; a quote would break out of the shim's TS string
+    /// literal into code the CLI then executes. Both must be rejected, not sanitised.
+    #[test]
+    fn write_instrument_rejects_non_uuid_session_id() {
+        let mut dir = std::env::temp_dir();
+        dir.push("cc-launcher");
+
+        let traversal = "../../evil";
+        assert!(write_instrument("omp", 45678, traversal).is_err());
+        assert!(!dir.join(format!("omp-{traversal}.ts")).exists());
+
+        let quote = "sid\";code();";
+        assert!(write_instrument("omp", 45678, quote).is_err());
+        assert!(!dir.join(format!("omp-{quote}.ts")).exists());
     }
 }

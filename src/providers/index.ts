@@ -9,6 +9,7 @@ import {
   agentInstalled, CLAUDE_CLI, type AgentCli, type AgentPermissionMode, type Restorable,
 } from "../types";
 import { CODEX_PERMISSION_MODES, codexEvents, codexHistoryEntries, codexHistoryMessages } from "./codex";
+import { OMP_PERMISSION_MODES, ompEvents } from "./omp";
 import { forecast5h, forecast7d, scopedForecasts, type Forecast } from "../rl";
 
 const CLAUDE_PERMISSION_MODES: readonly AgentPermissionMode[] = [
@@ -123,6 +124,7 @@ export const PROVIDER_ADAPTERS: readonly AgentProviderAdapter[] = [
     })),
   ] },
   { id: "codex", label: "Codex", events: codexEvents, history: codexHistory, permissionModes: CODEX_PERMISSION_MODES },
+  { id: "omp", label: "OMP", events: ompEvents, permissionModes: OMP_PERMISSION_MODES },
 ];
 
 const PROVIDERS = new Map(PROVIDER_ADAPTERS.map((provider) => [provider.id, provider]));
