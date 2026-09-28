@@ -133,6 +133,22 @@ pub(crate) fn run_telemetry_server<R: Runtime>(server: tiny_http::Server, app: A
             continue; // do NOT respond — resolve_permission will
         }
 
+        // An instrumented CLI's raw vendor event. Same payload agent.rs emits for Codex, so
+        // main.ts routes both through the provider registry with no second path.
+        if url.contains("agent") {
+            let _ = app.emit(
+                "agent-event",
+                serde_json::json!({
+                    "sessionId": stable_sid.clone().unwrap_or_default(),
+                    "provider": data.get("provider").cloned().unwrap_or(serde_json::Value::Null),
+                    "method": data.get("method").cloned().unwrap_or(serde_json::Value::Null),
+                    "params": data.get("params").cloned().unwrap_or(serde_json::Value::Null),
+                    "requestId": serde_json::Value::Null,
+                }),
+            );
+            let _ = request.respond(tiny_http::Response::from_string(""));
+            continue;
+        }
         let kind = if url.contains("statusline") { "statusline" } else { "hook" };
         let _ = app.emit("telemetry", serde_json::json!({ "kind": kind, "data": data }));
         let _ = request.respond(tiny_http::Response::from_string(""));
@@ -935,5 +951,40 @@ mod tests {
         let _ = std::fs::remove_file(&settings);
         let _ = std::fs::remove_dir_all(&cwd);
         // The transcript stays: deleting inside ~/.claude/projects is not this test's job.
+    }
+
+    /// An instrumented CLI posts raw vendor events; the route re-emits them in the same
+    /// shape agent.rs emits for Codex, so the frontend router needs no second path.
+    #[test]
+    fn agent_route_emits_provider_events() {
+        use tauri::Listener;
+        let (app, port) = mock_telemetry_app();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.listen("agent-event", move |e| {
+            let _ = tx.send(e.payload().to_string());
+        });
+        let next = || -> serde_json::Value {
+            let raw = rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("server emitted no agent-event");
+            serde_json::from_str(&raw).expect("event payload should be json")
+        };
+        let wait = std::time::Duration::from_secs(5);
+
+        read_response(
+            open_post(
+                port,
+                "/agent",
+                &[("X-CC-Session", "ours-abc")],
+                r#"{"provider":"omp","method":"agent_start","params":{"k":1}}"#,
+            ),
+            wait,
+        );
+        let ev = next();
+        assert_eq!(ev["sessionId"], "ours-abc");
+        assert_eq!(ev["provider"], "omp");
+        assert_eq!(ev["method"], "agent_start");
+        assert_eq!(ev["params"]["k"], 1);
+        assert!(ev["requestId"].is_null());
     }
 }
