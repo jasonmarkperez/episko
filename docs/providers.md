@@ -109,6 +109,17 @@ rejects unknown capability names and an integrated provider without `session-sta
 That means adding a manifest entry without its frontend adapter, or inventing a feature
 flag in Rust that TypeScript cannot understand, fails before merge.
 
+### The instrumented-CLI kind
+
+Claude and Codex each speak a vendor protocol Episko starts as a sidecar. A third
+kind fits providers whose own extension system can carry a per-launch asset: instead
+of a sidecar in `agent.rs`, the launch arm writes a shim through `write_instrument`
+and the CLI reports back over the `/agent` telemetry route. OMP is the first of
+these. It costs a shim asset, a `<vendor>.ts` adapter that turns `ProviderEvent`
+into `AgentEvent`s, a manifest row, a `write_instrument` arm and a `logos.ts` entry
+— no `agent.rs` sidecar branch and no history/resume plumbing unless the vendor's
+extension system exposes a public transcript to read.
+
 ## Pull-request definition of done
 
 For any change that touches agent sessions:

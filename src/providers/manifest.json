@@ -23,5 +23,14 @@
       "resume",
       "history"
     ]
+  },
+  "omp": {
+    "capabilities": [
+      "session-state",
+      "activity",
+      "context",
+      "usage",
+      "launch-permissions"
+    ]
   }
 }

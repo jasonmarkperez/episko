@@ -151,6 +151,15 @@ Tick these in order — each depends on the one above.
 - [ ] **Phases track reality.** The sidebar glyph moves idle → thinking → working →
       your-turn as the agent works, and the pane doesn't show the ended `·` while the
       process is still alive.
+- [ ] **OMP: start, prompt, tool activity, context/usage/cost, close.** `＋ Session` →
+      OMP in a real project, send a prompt that reads and writes a file. The pane
+      leaves `idle` and shows a phase, the inspector's context meter fills and names
+      the model, a tool call shows the current tool and argument with the file in the
+      Context card (`read` / `created`), token counts and a USD figure appear and the
+      USD figure climbs across turns, a `todo` call populates the plan, and the turn
+      ends when OMP finishes. Close the pane and check `ps aux | grep omp` for an
+      orphan. OMP claims no approval routing, history or resume, so none of those
+      three are part of this check.
 
 ### Keyboard, and the sidebar repaint guard
 
