@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { store } from "./localstorage"; // must precede modules that read localStorage
 import { applyAgentEvent, applyAgentEventToFleet } from "../src/agents";
 import { CODEX_PERMISSION_MODES, codexApiEquivalentUsd, codexEvents, codexHistoryEntries, codexHistoryMessages } from "../src/providers/codex";
@@ -291,5 +291,42 @@ describe("provider-neutral agent reducer", () => {
     expect(after.cost).toBe(3.5);
     expect(after.costHist).toEqual([3, 3.5]);
     expect(Object.values(usage)[0]).toBeCloseTo(3.5, 10);
+  });
+
+  // Exception to static-import convention: this test must simulate a webview reload, which
+  // discards every module's state, so it deliberately reloads the modules at runtime.
+  it("books the pane's real new spend across a second reload, not the prior incarnation's total (regression: $4.30 actual vs $4.00 booked)", async () => {
+    // Each life is a fresh webview-load copy of the adapter/reducer/store modules; only
+    // localStorage (module-external) survives, exactly like a real reload.
+    vi.resetModules();
+    const life1 = await import("../src/providers/omp");
+    const agents1 = await import("../src/agents");
+    const s1 = sess("reload-pane"); s1.provider = "omp"; s1.resumeId = "omp-thread-1";
+    for (const event of life1.ompEvents({ sessionId: "reload-pane", provider: "omp", method: "message_end", requestId: null,
+      params: { message: { role: "assistant", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 3 } } } } }))
+      agents1.applyAgentEvent(s1, event);
+
+    // First reload: adoptSession re-keys resumeId to the pane id, a fresh baseline key.
+    vi.resetModules();
+    const life2 = await import("../src/providers/omp");
+    const agents2 = await import("../src/agents");
+    const s2 = sess("reload-pane"); s2.provider = "omp"; s2.resumeId = "reload-pane";
+    for (const event of life2.ompEvents({ sessionId: "reload-pane", provider: "omp", method: "message_end", requestId: null,
+      params: { message: { role: "assistant", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 1 } } } } }))
+      agents2.applyAgentEvent(s2, event);
+
+    // Second reload: an already-running process never re-fires session_start, so resumeId stays
+    // the pane id from the first reload — the exact scenario the reviewer measured spend lost on.
+    vi.resetModules();
+    const life3 = await import("../src/providers/omp");
+    const agents3 = await import("../src/agents");
+    const usage3 = await import("../src/usage");
+    const s3 = sess("reload-pane"); s3.provider = "omp"; s3.resumeId = "reload-pane";
+    for (const event of life3.ompEvents({ sessionId: "reload-pane", provider: "omp", method: "message_end", requestId: null,
+      params: { message: { role: "assistant", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.3 } } } } }))
+      agents3.applyAgentEvent(s3, event);
+
+    const booked = Object.values(usage3.usage).reduce((a: number, b: number) => a + b, 0);
+    expect(booked).toBeCloseTo(4.3, 10);
   });
 });

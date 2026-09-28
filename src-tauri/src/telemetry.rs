@@ -1112,14 +1112,16 @@ mod tests {
         assert!(write_instrument("nope", 45678, "sid").is_err());
     }
 
-    /// `../` would escape `cc-launcher`; a quote would break out of the shim's TS string
-    /// literal into code the CLI then executes. Both must be rejected, not sanitised.
+    /// `..` in the filename slot would still land inside `cc-launcher` (no `/` to escape
+    /// with), so this is the traversal case that actually exercises the guard: without it
+    /// the write succeeds, since `omp-...ts` is an ordinary creatable filename. A quote
+    /// would break out of the shim's TS string literal into code the CLI then executes.
     #[test]
     fn write_instrument_rejects_non_uuid_session_id() {
         let mut dir = std::env::temp_dir();
         dir.push("cc-launcher");
 
-        let traversal = "../../evil";
+        let traversal = "..";
         assert!(write_instrument("omp", 45678, traversal).is_err());
         assert!(!dir.join(format!("omp-{traversal}.ts")).exists());
 

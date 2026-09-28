@@ -32,7 +32,9 @@ export type AgentEvent =
   | { type: "permission-resolved"; id: string }
   | { type: "plan"; todos: Todo[] }
   | { type: "usage"; usage: AgentTokenUsage }
-  | { type: "cost"; totalUsd: number }
+  // `resets` marks a counter that restarts with the process reporting it, so a drop is a
+  // restart to book in full, not a downward revision to clamp at the old high-water mark.
+  | { type: "cost"; totalUsd: number; resets?: boolean }
   | { type: "rate-limits"; windows: AgentRateLimit[]; scope: string | null }
   | { type: "error"; detail: string }
   | { type: "disconnected" };
@@ -86,7 +88,7 @@ export function applyAgentEvent(s: Sess, event: AgentEvent): void {
       // Totals survive a move/resume (like Claude's statusLine total), so the baseline is
       // keyed by provider + thread; reopening a conversation must not book it twice.
       const id = `${s.provider || "agent"}:${s.resumeId || s.id}`;
-      addUsage(costDelta(id, event.totalUsd, false, `${s.provider || "agent"}:${s.id}`), s);
+      addUsage(costDelta(id, event.totalUsd, event.resets === true, `${s.provider || "agent"}:${s.id}`), s);
       s.cost = event.totalUsd;
       pushHist(s.costHist, event.totalUsd);
       break;
