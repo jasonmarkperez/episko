@@ -4,10 +4,13 @@ import { usagePanelHtml } from "../src/usageview";
 import { sessions, setActiveId } from "../src/state";
 import { applyStatusline } from "../src/phase";
 import { rl } from "../src/rl";
-import { CLAUDE_CLI, type AgentRateLimit, type Sess } from "../src/types";
+import { CLAUDE_CLI, providerCapabilities, type AgentRateLimit, type Sess } from "../src/types";
 
 function fakeSess(rateLimits: AgentRateLimit[]): Sess {
-  return { id: "s1", provider: "codex", rateLimits, rateLimitScope: null } as unknown as Sess;
+  return {
+    id: "s1", provider: "codex", rateLimits, rateLimitScope: null,
+    kind: "agent", capabilities: providerCapabilities("codex"),
+  } as unknown as Sess;
 }
 
 // A Sess as newSession() builds one, minus the DOM/xterm handles applyStatusline doesn't read
@@ -89,6 +92,16 @@ describe("usagePanelHtml — per-pane rate-limit windows", () => {
     // track whenever rl.h5/d7 are null, which would pass this check for the wrong reason.
     const paneHtml = html.slice(html.indexOf("Pane limits"));
     expect(paneHtml).toContain("Usage window");
+    expect(paneHtml).toMatch(/fc-tlel" style="width:0%"/);
+  });
+
+  it("treats a non-positive windowMins the same as an unknown span, not a divide-by-zero", () => {
+    // A provider's Number.isFinite guard accepts 0; the timeline maths must not then divide by it.
+    sessions.set("s1", fakeSess([{ usedPercent: 30, resetsAt: null, windowMins: 0 }]));
+    setActiveId("s1");
+    const html = usagePanelHtml();
+    const paneHtml = html.slice(html.indexOf("Pane limits"));
+    expect(paneHtml).not.toContain("NaN");
     expect(paneHtml).toMatch(/fc-tlel" style="width:0%"/);
   });
 

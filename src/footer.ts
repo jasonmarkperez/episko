@@ -21,7 +21,7 @@ import { FOOT_SEGS, footShown } from "./footprefs";
 import {
   activeId, availEngines, engineDef, footPrefs, keyPrefs, sessions, setTermEngine, telemetryUp, termEngine,
 } from "./state";
-import { providerAdapter } from "./providers";
+import { forecastsOwnLimits, providerAdapter } from "./providers";
 import { daySpend, todayKey, usage, usageDetail } from "./usage";
 
 // Owned by main.ts: the colour popover (project rows) and putting a pane on the stage.
@@ -67,9 +67,9 @@ function selectedLimits(): SelectedLimits | null {
   const s = activeId ? sessions.get(activeId) : null;
   if (!s || !isAgent(s) || !hasAgentCapability(s, "usage")) return null;
   const adapter = providerAdapter(s.provider ?? "");
-  const specialized = adapter?.rateLimitForecasts?.();
-  const source = specialized?.length
-    ? specialized.map((window) => ({
+  const ownForecast = forecastsOwnLimits(s.provider ?? "");
+  const source = ownForecast
+    ? adapter!.rateLimitForecasts!().map((window) => ({
         usedPercent: window.forecast.used ?? 0, resetsAt: window.forecast.resetTs,
         windowMins: window.windowMins, forecast: window.forecast,
         label: window.label, sub: window.sub, note: window.note,
@@ -84,7 +84,7 @@ function selectedLimits(): SelectedLimits | null {
   return {
     id: adapter?.id ?? s.provider ?? "",
     label: adapter?.label ?? s.provider ?? "Agent",
-    forecast: !!specialized?.length,
+    forecast: ownForecast,
     reported: windows.some((window) => window.forecast.used != null),
     windows,
   };

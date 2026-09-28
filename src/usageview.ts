@@ -7,8 +7,8 @@ import { esc, fmtClock, fmtMb, fmtRate, fmtSpan, fmtUntil, uDelta, uTok, uUsd, u
 import { popGoHtml } from "./footerview";
 import { D7_LEN, forecast5h, forecast7d, forecastWin, H5_LEN, rlScoped, scopedForecasts, type Forecast } from "./rl";
 import { accentFor, activeId, ioAll, sessions } from "./state";
-import { providerAdapter } from "./providers";
-import { hasAgentCapability } from "./types";
+import { forecastsOwnLimits } from "./providers";
+import { hasAgentCapability, isAgent } from "./types";
 import {
   dayIo, ioDayCount, ioSameNote, ioTotal, modelSeries, todayKey, tokenDays, U_MONTHS, uBuckets,
   uDkey, uModels, usage, usageRange, usageWindow, uSum,
@@ -274,12 +274,13 @@ function fcWinHtml(name: string, sub: string, f: Forecast, burnPerHr: number | n
   const usedW = f.used == null ? 0 : Math.min(100, Math.max(0, f.used));
   const projW = f.proj == null ? usedW : Math.min(100, Math.max(0, f.proj));
   const ghostW = Math.max(0, projW - usedW);
-  // A window of unknown span (len null) draws no elapsed timeline rather than one measured
-  // against an invented length.
-  const elapsed = len != null && f.secLeft != null ? len - f.secLeft : 0;
-  const elapsedPct = len != null ? Math.min(100, Math.max(0, elapsed / len * 100)) : 0;
-  const outPct = (len != null && f.runsOut && f.etaSec != null && f.secLeft != null)
-    ? Math.min(100, Math.max(0, (elapsed + f.etaSec) / len * 100)) : null;
+  // A window of unknown or non-positive span draws no elapsed timeline rather than one
+  // measured against an invented length.
+  const span = len != null && len > 0 ? len : null;
+  const elapsed = span != null && f.secLeft != null ? span - f.secLeft : 0;
+  const elapsedPct = span != null ? Math.min(100, Math.max(0, elapsed / span * 100)) : 0;
+  const outPct = (span != null && f.runsOut && f.etaSec != null && f.secLeft != null)
+    ? Math.min(100, Math.max(0, (elapsed + f.etaSec) / span * 100)) : null;
   const vc = verdictChip(f);
   const verdict = (f.used != null && f.used >= 100) ? `<span class="vchip s-bad">at cap</span>`
     : vc || `<span class="vchip s-mut">level only</span>`;
@@ -348,8 +349,8 @@ function scopedBlockHtml(): string {
 function paneLimitsBlockHtml(): string {
   const s = activeId ? sessions.get(activeId) : null;
   // A provider whose adapter forecasts its own windows (Claude) is already metered above,
-  // from the same s.rateLimits mirror (phase.ts) — footer.ts:70 makes the identical split.
-  if (!s || providerAdapter(s.provider ?? "")?.rateLimitForecasts?.()?.length) return "";
+  // from the same s.rateLimits mirror (phase.ts) — footer.ts's selectedLimits makes the identical split.
+  if (!s || !isAgent(s) || !hasAgentCapability(s, "usage") || forecastsOwnLimits(s.provider ?? "")) return "";
   const wins = s.rateLimits;
   if (!wins.length) return "";
   const note = "Reported by this pane, not the account. A single reading carries no pace, so this is the level only.";

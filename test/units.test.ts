@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import "./localstorage"; // must precede modules that read localStorage
-import { codexEvents } from "../src/providers/codex";
+import { codexEvents, codexHistoryEntries } from "../src/providers/codex";
 import { applyStatusline } from "../src/phase";
 import { CLAUDE_CLI, type AgentRateLimit, type Sess } from "../src/types";
 
@@ -22,17 +22,19 @@ function claudeSess(): Sess {
 // Epoch seconds for a plausible "now": a milliseconds value is ~1000x larger and fails.
 const EPOCH_SECONDS = { min: 1_600_000_000, max: 2_000_000_000 };
 
+// Shared by every field that claims to be epoch seconds (AgentRateLimit.resetsAt,
+// HistEntry.last_active): a milliseconds value is ~1000x too large to land in this band.
+function assertEpochSeconds(value: number, label: string) {
+  expect(value, `${label} must be epoch SECONDS, got ${value}`).toBeGreaterThan(EPOCH_SECONDS.min);
+  expect(value, `${label} must be epoch SECONDS, got ${value}`).toBeLessThan(EPOCH_SECONDS.max);
+}
+
 // A bare 0-1 fraction is indistinguishable from a genuinely-low percentage, so usedPercent's range check cannot catch it.
 function assertUnits(windows: AgentRateLimit[]) {
   for (const w of windows) {
     expect(w.usedPercent).toBeGreaterThanOrEqual(0);
     expect(w.usedPercent).toBeLessThanOrEqual(100);
-    if (w.resetsAt !== null) {
-      expect(w.resetsAt, `resetsAt must be epoch SECONDS, got ${w.resetsAt}`)
-        .toBeGreaterThan(EPOCH_SECONDS.min);
-      expect(w.resetsAt, `resetsAt must be epoch SECONDS, got ${w.resetsAt}`)
-        .toBeLessThan(EPOCH_SECONDS.max);
-    }
+    if (w.resetsAt !== null) assertEpochSeconds(w.resetsAt, "resetsAt");
     if (w.windowMins !== null) {
       // Minutes: a 7-day window is 10080, not 604800 (seconds) or 604800000 (ms).
       expect(w.windowMins).toBeLessThanOrEqual(60 * 24 * 90);
@@ -81,5 +83,25 @@ describe("rate-limit units are the same for every provider", () => {
     applyStatusline(s, { rate_limits: { five_hour: { used_percentage: 43, resets_at: 1790628600 } } });
     expect(s.rateLimits).toEqual([{ usedPercent: 43, resetsAt: 1790628600, windowMins: 300 }]);
     assertUnits(s.rateLimits);
+  });
+});
+
+describe("HistEntry.last_active is epoch seconds for every provider", () => {
+  it("codex history entries report last_active in epoch seconds", () => {
+    const entries = codexHistoryEntries({
+      data: [{
+        id: "t1", cwd: "/w", parentThreadId: null, name: "thread", preview: "hi",
+        recencyAt: 1790628600, updatedAt: 1790620000, createdAt: 1790600000,
+        gitInfo: { branch: "main" },
+      }],
+    });
+    expect(entries).toHaveLength(1);
+    assertEpochSeconds(entries[0].last_active, "last_active");
+  });
+
+  it("rejects a last_active that is milliseconds", () => {
+    // The App Server's raw recencyAt with no unit check: the same bug shape as resetsAt above.
+    const entries = codexHistoryEntries({ data: [{ id: "t1", cwd: "/w", recencyAt: 1790628600281 }] });
+    expect(() => assertEpochSeconds(entries[0].last_active, "last_active")).toThrow();
   });
 });

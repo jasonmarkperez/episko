@@ -133,6 +133,12 @@ const PROVIDERS = new Map(PROVIDER_ADAPTERS.map((provider) => [provider.id, prov
 
 export const providerAdapter = (id: string) => PROVIDERS.get(id);
 
+// The one boundary check for "does this provider already forecast its own windows" (Claude
+// today): callers must not also render a client-computed forecast for the same data.
+export function forecastsOwnLimits(provider: string): boolean {
+  return !!providerAdapter(provider)?.rateLimitForecasts?.()?.length;
+}
+
 export function providerPermissionMode(provider: string, id: string): AgentPermissionMode | null {
   const modes = providerAdapter(provider)?.permissionModes;
   if (!modes?.length) return null;

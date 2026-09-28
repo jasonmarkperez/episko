@@ -101,7 +101,8 @@ also requires all of the following:
    routing (`permissions`) and starting policy (`launch-permissions`) are separate
    promises.
 8. Add native-payload fixtures for events, history and failures. Test launch/resume
-   argument construction in Rust and verify both macOS and Windows CI.
+   argument construction in Rust and verify both macOS and Windows CI. A provider
+   producing rate-limit windows or history entries adds a case to `test/units.test.ts`.
 9. Run the manual session checklist in `RELEASE.md`: start, prompt, tool activity,
    approval, failure, context/usage/cost, close, history and resume.
 
