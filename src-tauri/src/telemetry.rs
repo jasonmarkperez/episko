@@ -84,6 +84,19 @@ pub(crate) fn serve_telemetry<R: Runtime>(server: tiny_http::Server, app: AppHan
     }
 }
 
+/// The one key this contract defines (docs/providers.md): OMP's `session_start` announces
+/// `params.sessionId`. Read by key, never `method` — but not `threadId`: agent.rs's
+/// subagent items carry the CHILD thread there, and latching it would re-key the cost
+/// baseline on every child event, the exact bug this task removes. `filter` also drops an
+/// empty id, which would otherwise beat the roster row (`adoptResumeId` chains with `??`).
+fn conversation_id(params: &serde_json::Value) -> Option<String> {
+    params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
+}
+
 /// Forward each hook/statusLine POST as one `telemetry` event, with our stable launch id
 /// forced onto `session_id`. Returns when the listener dies; `serve_telemetry` puts it back.
 /// Generic over the runtime so tests can drive it against `tauri::test::mock_app()`.
@@ -136,13 +149,24 @@ pub(crate) fn run_telemetry_server<R: Runtime>(server: tiny_http::Server, app: A
         // An instrumented CLI's raw vendor event. Same payload agent.rs emits for Codex, so
         // main.ts routes both through the provider registry with no second path.
         if url.contains("agent") {
+            let params = data.get("params").cloned().unwrap_or(serde_json::Value::Null);
+            // Latch the id conversation_id() finds, never gated on `method` — see its doc.
+            if let Some(sid) = &stable_sid {
+                if let Some(conv_id) = conversation_id(&params) {
+                    let st = app.state::<AppState>();
+                    let mut sessions = st.sessions.lock().unwrap();
+                    if let Some(s) = sessions.get_mut(sid) {
+                        s.resume_id = Some(conv_id);
+                    }
+                }
+            }
             let _ = app.emit(
                 "agent-event",
                 serde_json::json!({
                     "sessionId": stable_sid.clone().unwrap_or_default(),
                     "provider": data.get("provider").cloned().unwrap_or(serde_json::Value::Null),
                     "method": data.get("method").cloned().unwrap_or(serde_json::Value::Null),
-                    "params": data.get("params").cloned().unwrap_or(serde_json::Value::Null),
+                    "params": params,
                     "requestId": serde_json::Value::Null,
                 }),
             );
@@ -1030,6 +1054,84 @@ mod tests {
         assert_eq!(ev["method"], "agent_start");
         assert_eq!(ev["params"]["k"], 1);
         assert!(ev["requestId"].is_null());
+    }
+
+    /// A bare live session for a test to install directly: a real pty and a trivial child
+    /// that exits immediately, since the route under test only needs the map entry present
+    /// and its `resume_id` observable afterward — no reader thread, no real agent.
+    fn insert_bare_session(app: &tauri::App<tauri::test::MockRuntime>, id: &str) {
+        let pair = portable_pty::native_pty_system()
+            .openpty(portable_pty::PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .expect("openpty");
+        #[cfg(windows)]
+        let cmd = {
+            let mut c = portable_pty::CommandBuilder::new("cmd.exe");
+            c.arg("/C");
+            c.arg("exit");
+            c
+        };
+        #[cfg(not(windows))]
+        let cmd = {
+            let mut c = portable_pty::CommandBuilder::new("/bin/sh");
+            c.arg("-c");
+            c.arg("exit 0");
+            c
+        };
+        let child = pair.slave.spawn_command(cmd).expect("spawn trivial child");
+        drop(pair.slave);
+        let writer = pair.master.take_writer().expect("writer");
+        let killer = child.clone_killer();
+        app.state::<AppState>().sessions.lock().unwrap().insert(
+            id.to_string(),
+            crate::Session {
+                master: pair.master,
+                writer,
+                killer,
+                pid: None,
+                workdir: "/tmp".to_string(),
+                kind: "agent",
+                provider: Some("omp".to_string()),
+                scrollback: std::sync::Arc::new(Mutex::new(crate::pty::ScrollBuf::new())),
+                win32_input: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                resume_id: None,
+            },
+        );
+    }
+
+    /// The route learns a provider's conversation id from `params.sessionId`, never from
+    /// `method`: a second POST on a DIFFERENT method that also carries `sessionId` must
+    /// still latch (a `method == "session_start"` guard would pass the first POST alone and
+    /// leave this one inert — see 198dfff). An empty or `null` id must not overwrite a real one.
+    #[test]
+    fn agent_route_latches_the_conversation_id() {
+        let (app, port) = mock_telemetry_app();
+        insert_bare_session(&app, "ours-abc");
+        let latched = || {
+            let live = crate::pty::live_sessions(app.state::<AppState>());
+            assert_eq!(live.len(), 1);
+            serde_json::to_value(&live[0]).unwrap()["resume_id"].clone()
+        };
+        let post = |body: &str| {
+            read_response(
+                open_post(port, "/agent", &[("X-CC-Session", "ours-abc")], body),
+                std::time::Duration::from_secs(5),
+            );
+        };
+
+        post(r#"{"provider":"omp","method":"session_start","params":{"sessionId":"conv-123"}}"#);
+        assert_eq!(latched(), "conv-123", "session_start's sessionId should latch");
+
+        post(r#"{"provider":"omp","method":"message_end","params":{"sessionId":"conv-456"}}"#);
+        assert_eq!(
+            latched(), "conv-456",
+            "a different method carrying sessionId must still latch — the route reads params, not method"
+        );
+
+        post(r#"{"provider":"omp","method":"message_end","params":{"sessionId":""}}"#);
+        assert_eq!(latched(), "conv-456", "an empty sessionId must not overwrite the real one");
+
+        post(r#"{"provider":"omp","method":"message_end","params":{"sessionId":null}}"#);
+        assert_eq!(latched(), "conv-456", "a null sessionId must not overwrite the real one");
     }
 
     /// Executed, never read: a test that inspects the generated shim agrees with our intent,

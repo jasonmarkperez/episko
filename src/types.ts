@@ -441,7 +441,7 @@ export interface ExtSession {
 // ---------- restorable sessions: on screen at quit; the provider is stored so a preference change
 // cannot reopen one in the wrong CLI ----------
 // One embedded PTY as the backend holds it; matters only after a webview reload, when all are orphans (#47).
-export interface LiveSess { id: string; kind: string; provider: string | null; workdir: string }
+export interface LiveSess { id: string; kind: string; provider: string | null; workdir: string; resume_id: string | null }
 
 export interface Restorable {
   id: string;          // the original launch uuid (roster key, stable across restarts)

@@ -36,7 +36,7 @@ import { renderAttn, renderFoot } from "./footer";
 import { updateTray } from "./tray";
 import { closeExternalView, flushRoster, queueRosterSave, refreshDirtyStates, rosterEntry } from "./mirror";
 import { openWt, refreshWtDialog } from "./worktree";
-import { adoptIdentity, inStageGroup, nextAfterClose, nextInGroup, orphanAdoptions, splitAnchorFor, splitShells } from "./grouping";
+import { adoptIdentity, adoptResumeId, inStageGroup, nextAfterClose, nextInGroup, orphanAdoptions, splitAnchorFor, splitShells } from "./grouping";
 import { probeIcon } from "./icons";
 import { addIo, ioCreditBps, ioExcludedMb } from "./usage";
 import { execCmd, exitWaiters, lastRunnableById, taskPrefs, type TaskLaunchOpts } from "./tasks";
@@ -259,7 +259,7 @@ export async function adoptOrphans(): Promise<number> {
   return orphans.length;
 }
 
-async function adoptSession(o: { id: string; workdir: string; provider: string; meta: Restorable | null }) {
+async function adoptSession(o: { id: string; workdir: string; provider: string; resumeId: string | null; meta: Restorable | null }) {
   const m = o.meta;
   const provider = o.provider || m?.provider || "claude";
   const providerDef = provider === "claude" ? CLAUDE_CLI : agentDef(provider);
@@ -272,7 +272,7 @@ async function adoptSession(o: { id: string; workdir: string; provider: string; 
   const { term, fit } = provider === "claude" ? newClaudeTerm(o.id, pane) : newAgentTerm(o.id, pane);
   const s: Sess = {
     id: o.id, project, accent: accentFor(colorKey), workdir: o.workdir, colorKey,
-    resumeId: m?.resumeId ?? o.id, branch, worktree,
+    resumeId: adoptResumeId(o.resumeId, m, o.id), branch, worktree,
     title: m?.title ?? providerDef?.label ?? provider,
     phase: "idle", phaseSince: Date.now(), attnAt: 0, seenAt: Date.now(), lastActivity: m?.lastActivity ?? Date.now(),
     attention: null, pendingCmd: "", pendingPermId: null, pendRisk: null, pendingPermissions: [], agents: new Map(), fanout: null,

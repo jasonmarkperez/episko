@@ -121,10 +121,16 @@ export function dormantBusy(d: Restorable): boolean {
 }
 // Backend PTYs to rebuild a pane for after a webview reload (#47). Agent panes only: a task's `run`
 // did not survive and a shell is cheap to reopen. Runs before `loadDormants`, hence takes the roster.
-export function orphanAdoptions(back: LiveSess[], roster: Restorable[]): { id: string; workdir: string; provider: string; meta: Restorable | null }[] {
+export function orphanAdoptions(back: LiveSess[], roster: Restorable[]): { id: string; workdir: string; provider: string; resumeId: string | null; meta: Restorable | null }[] {
   return back
     .filter((b) => b.kind === "agent" && !!b.provider && !sessions.has(b.id))
-    .map((b) => ({ id: b.id, workdir: b.workdir, provider: b.provider!, meta: roster.find((r) => r?.id === b.id) ?? null }));
+    .map((b) => ({ id: b.id, workdir: b.workdir, provider: b.provider!, resumeId: b.resume_id, meta: roster.find((r) => r?.id === b.id) ?? null }));
+}
+// The backend's latch is the live conversation the provider is actually in; the roster is what
+// was last persisted (only providers claiming `resume` get a row, and only after their first
+// save); the pane id is the fallback that admits the real identity did not survive.
+export function adoptResumeId(backResumeId: string | null, meta: Restorable | null, paneId: string): string {
+  return backResumeId ?? meta?.resumeId ?? paneId;
 }
 // The roster entry is the identity the pane was launched under and wins outright. Without one,
 // `heads` places a worktree under its repo; a folder no repo claims stays its own project (fail closed).

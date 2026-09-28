@@ -44,6 +44,9 @@ pub(crate) struct Session {
     /// self-describing across a webview reload; agent identity is `provider`.
     kind: &'static str,
     provider: Option<String>, // "claude", "codex", ...; None for a shell/task
+    /// The provider's live conversation id, latched from its own announcement rather than a
+    /// vendor method name; survives a webview reload that drops the frontend's copy (#47).
+    resume_id: Option<String>,
     /// Recent raw output, shared with the reader thread; refills a pane after a webview reload.
     scrollback: std::sync::Arc<Mutex<pty::ScrollBuf>>,
     /// Latched by the reader when ConPTY asks for win32 input records (`ESC[?9001h`);

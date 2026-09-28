@@ -122,7 +122,10 @@ adapter that turns `ProviderEvent` into `AgentEvent`s, a manifest row, a
 `write_instrument` arm, a `start_provider` arm in `agent.rs` (without it the launch
 falls through to no arguments and the pane is silently terminal-only), and a
 `logos.ts` entry — no sidecar and no history/resume plumbing unless the vendor's
-extension system exposes a public transcript to read.
+extension system exposes a public transcript to read. The `/agent` route latches
+`Session.resume_id` from `params.sessionId` on whatever event first carries it — never
+from `method` — so the shim must announce its conversation id under that exact key;
+a differently-named key silently falls back to the pane id, with no gate to catch it.
 
 ## Pull-request definition of done
 
