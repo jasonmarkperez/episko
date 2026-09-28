@@ -34,6 +34,13 @@ use tauri::{AppHandle, Emitter, Manager};
 #[cfg(windows)]
 use crate::platform::KeepAwake;
 
+/// Shared guard for a session id headed for a filesystem path, filename, or a backend
+/// latch: uuid characters only, so `../` or a closing quote can never reach the filesystem
+/// or an interpreter, and a bounded length so an unbounded string can never reach memory.
+pub(crate) fn valid_session_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 pub(crate) struct Session {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,

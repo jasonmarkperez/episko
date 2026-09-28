@@ -45,9 +45,9 @@ export function usageRow(label: string, sub: string, f: Forecast, note?: string)
     ? `resets ${fmtClock(f.resetTs)} · in ${fmtUntil(f.resetTs)}`
     : (f.used == null ? "no reading yet" : "no active window");
   return `<div class="up-row">
-    <div class="up-top"><span class="up-l">${label}</span><span class="up-sub">${sub}</span><span class="up-pct ${cls}">${pctTxt}</span></div>
+    <div class="up-top"><span class="up-l">${esc(label)}</span><span class="up-sub">${esc(sub)}</span><span class="up-pct ${cls}">${pctTxt}</span></div>
     <div class="up-bar ${cls}"><i class="up-fill" style="width:${usedW}%"></i><i class="up-ghost" style="left:${usedW}%;width:${ghostW}%"></i></div>
-    <div class="up-fore"><span>${note && f.used != null ? note : foreText(f)}</span>${verdictChip(f)}</div>
+    <div class="up-fore"><span>${note && f.used != null ? esc(note) : foreText(f)}</span>${verdictChip(f)}</div>
     <div class="up-reset">${resetTxt}</div>
   </div>`;
 }
@@ -267,6 +267,16 @@ function uProjects(): string {
     <table class="u-tbl"><thead><tr><th>Project</th><th class="u-num">Share</th><th class="u-num">Tokens</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
+// A window's name, in the one spelling every surface (footer segment, popup, this panel)
+// shares. `limitShort` is the compact form ("5h"/"7d"); `limitName` pairs it with the
+// popup's plain-language sub ("Session"/"5-hour window").
+export const limitShort = (mins: number | null): string => mins === 300 ? "5h"
+  : mins === 10080 ? "7d" : mins != null && mins % 1440 === 0 ? `${mins / 1440}d`
+    : mins != null && mins % 60 === 0 ? `${mins / 60}h` : mins != null ? `${mins}m` : "limit";
+export const limitName = (mins: number | null): [string, string] => mins === 300
+  ? ["Session", "5-hour window"] : mins === 10080 ? ["Weekly", "7-day window"]
+    : [limitShort(mins), "usage window"];
+
 // One window of the forecast card. Reads the same forecast() the footer and popup use.
 function fcWinHtml(name: string, sub: string, f: Forecast, burnPerHr: number | null, len: number | null, burnUnit: string, note?: string): string {
   const cls = f.used == null ? "" : "s-" + f.status;
@@ -354,14 +364,16 @@ function paneLimitsBlockHtml(): string {
   const wins = s.rateLimits;
   if (!wins.length) return "";
   const note = "Reported by this pane, not the account. A single reading carries no pace, so this is the level only.";
-  return `<div class="label" style="margin-top:15px">Pane limits <span class="fc-hint">· this pane's own rate-limit windows</span></div>
+  return `<div class="fc-block">
+    <div class="label" style="margin-top:15px">Pane limits <span class="fc-hint">· this pane's own rate-limit windows</span></div>
     <div class="fc-grid">
       ${wins.map((w) => {
         const len = w.windowMins != null ? w.windowMins * 60 : null;
-        const name = w.label ? esc(w.label) : len != null ? fmtSpan(len) : "Usage window";
+        const name = w.label ? esc(w.label) : len != null && len > 0 ? limitName(w.windowMins)[0] : "Usage window";
         return fcWinHtml(name, "this pane's window", forecastWin(w.usedPercent, w.resetsAt, null, len ?? undefined), null, len, "%/day", note);
       }).join("")}
-    </div>`;
+    </div>
+  </div>`;
 }
 export function usagePanelHtml(): string {
   const ranges = USAGE_RANGES.map(([n, l]) => `<button class="u-rbtn${n === usageRange ? " on" : ""}" data-urange="${n}">${l}</button>`).join("");

@@ -150,13 +150,19 @@ pub(crate) fn run_telemetry_server<R: Runtime>(server: tiny_http::Server, app: A
         // main.ts routes both through the provider registry with no second path.
         if url.contains("agent") {
             let params = data.get("params").cloned().unwrap_or(serde_json::Value::Null);
-            // Latch the id conversation_id() finds, never gated on `method` — see its doc.
+            // Latch the id conversation_id() finds, never gated on `method` — see its doc;
+            // gated on kind and alphabet, since the pane id is visible in any local
+            // process's argv and this write outranks the persisted roster on adoption.
             if let Some(sid) = &stable_sid {
                 if let Some(conv_id) = conversation_id(&params) {
-                    let st = app.state::<AppState>();
-                    let mut sessions = st.sessions.lock().unwrap();
-                    if let Some(s) = sessions.get_mut(sid) {
-                        s.resume_id = Some(conv_id);
+                    if crate::valid_session_id(&conv_id) {
+                        let st = app.state::<AppState>();
+                        let mut sessions = st.sessions.lock().unwrap();
+                        if let Some(s) = sessions.get_mut(sid) {
+                            if s.kind == "agent" {
+                                s.resume_id = Some(conv_id);
+                            }
+                        }
                     }
                 }
             }
@@ -269,11 +275,7 @@ pub(crate) fn write_instrument(
 ) -> std::io::Result<Vec<String>> {
     // Pasted into a filename and into an executed TS literal: uuid characters only, so
     // neither `../` nor a closing quote can reach the filesystem or the interpreter.
-    if session_id.is_empty()
-        || !session_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-    {
+    if !crate::valid_session_id(session_id) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("not a valid session id: {session_id}"),
@@ -1059,7 +1061,7 @@ mod tests {
     /// A bare live session for a test to install directly: a real pty and a trivial child
     /// that exits immediately, since the route under test only needs the map entry present
     /// and its `resume_id` observable afterward — no reader thread, no real agent.
-    fn insert_bare_session(app: &tauri::App<tauri::test::MockRuntime>, id: &str) {
+    fn insert_bare_session(app: &tauri::App<tauri::test::MockRuntime>, id: &str, kind: &'static str) {
         let pair = portable_pty::native_pty_system()
             .openpty(portable_pty::PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
             .expect("openpty");
@@ -1089,7 +1091,7 @@ mod tests {
                 killer,
                 pid: None,
                 workdir: "/tmp".to_string(),
-                kind: "agent",
+                kind,
                 provider: Some("omp".to_string()),
                 scrollback: std::sync::Arc::new(Mutex::new(crate::pty::ScrollBuf::new())),
                 win32_input: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1105,7 +1107,7 @@ mod tests {
     #[test]
     fn agent_route_latches_the_conversation_id() {
         let (app, port) = mock_telemetry_app();
-        insert_bare_session(&app, "ours-abc");
+        insert_bare_session(&app, "ours-abc", "agent");
         let latched = || {
             let live = crate::pty::live_sessions(app.state::<AppState>());
             assert_eq!(live.len(), 1);
@@ -1132,6 +1134,68 @@ mod tests {
 
         post(r#"{"provider":"omp","method":"message_end","params":{"sessionId":null}}"#);
         assert_eq!(latched(), "conv-456", "a null sessionId must not overwrite the real one");
+    }
+
+    /// Finding 2: the pane id is visible in any local process's argv, so the latch must not
+    /// trust the target's kind — a shell or task pane must never pick up a `resume_id`.
+    #[test]
+    fn agent_route_never_latches_onto_a_non_agent_pane() {
+        let (app, port) = mock_telemetry_app();
+        insert_bare_session(&app, "shell-1", "shell");
+        read_response(
+            open_post(
+                port,
+                "/agent",
+                &[("X-CC-Session", "shell-1")],
+                r#"{"provider":"omp","method":"session_start","params":{"sessionId":"conv-123"}}"#,
+            ),
+            std::time::Duration::from_secs(5),
+        );
+        let live = crate::pty::live_sessions(app.state::<AppState>());
+        assert_eq!(live.len(), 1);
+        assert!(
+            serde_json::to_value(&live[0]).unwrap()["resume_id"].is_null(),
+            "a shell pane must never latch a conversation id"
+        );
+    }
+
+    /// Finding 2: reject an id outside the uuid alphabet, so a value later pasted into a
+    /// filesystem path (usage.rs's transcript_reader) can never carry a path separator.
+    #[test]
+    fn agent_route_rejects_a_conversation_id_outside_the_uuid_alphabet() {
+        let (app, port) = mock_telemetry_app();
+        insert_bare_session(&app, "ours-abc", "agent");
+        read_response(
+            open_post(
+                port,
+                "/agent",
+                &[("X-CC-Session", "ours-abc")],
+                r#"{"provider":"omp","method":"session_start","params":{"sessionId":"../../../../tmp/x"}}"#,
+            ),
+            std::time::Duration::from_secs(5),
+        );
+        let live = crate::pty::live_sessions(app.state::<AppState>());
+        assert!(serde_json::to_value(&live[0]).unwrap()["resume_id"].is_null());
+    }
+
+    /// Finding 2: cap the accepted length (128 is ample for a uuid), so an unbounded string
+    /// cannot ride the latch into backend-held state.
+    #[test]
+    fn agent_route_rejects_a_conversation_id_over_the_length_cap() {
+        let (app, port) = mock_telemetry_app();
+        insert_bare_session(&app, "ours-abc", "agent");
+        let long_id = "a".repeat(129);
+        read_response(
+            open_post(
+                port,
+                "/agent",
+                &[("X-CC-Session", "ours-abc")],
+                &format!(r#"{{"provider":"omp","method":"session_start","params":{{"sessionId":"{long_id}"}}}}"#),
+            ),
+            std::time::Duration::from_secs(5),
+        );
+        let live = crate::pty::live_sessions(app.state::<AppState>());
+        assert!(serde_json::to_value(&live[0]).unwrap()["resume_id"].is_null());
     }
 
     /// Executed, never read: a test that inspects the generated shim agrees with our intent,

@@ -10,7 +10,7 @@ import { abbr } from "./phase";
 import { forecastWin, type Forecast } from "./rl";
 import { refreshScopedLimits } from "./rlprobe";
 import { hasAgentCapability, isAgent, phaseText, statusKey, type AgentRateLimit, type Engine, type Sess } from "./types";
-import { costPopHtml, ioFigures, ioPopHtml, liveIo, usageRow } from "./usageview";
+import { costPopHtml, ioFigures, ioPopHtml, limitName, limitShort, liveIo, usageRow } from "./usageview";
 import { closeCafPop } from "./caffeinate";
 import { closeSignoffPop } from "./signoff";
 import { needsYouSessions, reactorLabel, reactorState } from "./grouping";
@@ -21,7 +21,7 @@ import { FOOT_SEGS, footShown } from "./footprefs";
 import {
   activeId, availEngines, engineDef, footPrefs, keyPrefs, sessions, setTermEngine, telemetryUp, termEngine,
 } from "./state";
-import { forecastsOwnLimits, providerAdapter } from "./providers";
+import { providerAdapter } from "./providers";
 import { daySpend, todayKey, usage, usageDetail } from "./usage";
 
 // Owned by main.ts: the colour popover (project rows) and putting a pane on the stage.
@@ -56,20 +56,19 @@ interface LimitWindowView extends AgentRateLimit { forecast: Forecast; label?: s
 interface SelectedLimits { id: string; label: string; forecast: boolean; reported: boolean; windows: LimitWindowView[] }
 
 const emptyForecast = (): Forecast => forecastWin(null, null, null);
-const limitShort = (mins: number | null): string => mins === 300 ? "5h"
-  : mins === 10080 ? "7d" : mins != null && mins % 1440 === 0 ? `${mins / 1440}d`
-    : mins != null && mins % 60 === 0 ? `${mins / 60}h` : mins != null ? `${mins}m` : "limit";
-const limitName = (mins: number | null): [string, string] => mins === 300
-  ? ["Session", "5-hour window"] : mins === 10080 ? ["Weekly", "7-day window"]
-    : [limitShort(mins), "usage window"];
 
 function selectedLimits(): SelectedLimits | null {
   const s = activeId ? sessions.get(activeId) : null;
   if (!s || !isAgent(s) || !hasAgentCapability(s, "usage")) return null;
   const adapter = providerAdapter(s.provider ?? "");
-  const ownForecast = forecastsOwnLimits(s.provider ?? "");
+  // Computed once and reused: `adapter.rateLimitForecasts` walks rlSamples through every
+  // forecast (forecast5h/7d, scopedForecasts) — calling it twice per renderFoot tick, once
+  // just to read `.length` (forecastsOwnLimits) and again for the windows, doubled that cost
+  // on the app's hottest render path for no reason.
+  const own = adapter?.rateLimitForecasts?.();
+  const ownForecast = !!own?.length;
   const source = ownForecast
-    ? adapter!.rateLimitForecasts!().map((window) => ({
+    ? own!.map((window) => ({
         usedPercent: window.forecast.used ?? 0, resetsAt: window.forecast.resetTs,
         windowMins: window.windowMins, forecast: window.forecast,
         label: window.label, sub: window.sub, note: window.note,

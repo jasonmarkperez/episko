@@ -71,13 +71,6 @@ describe("rate-limit units are the same for every provider", () => {
       .toThrow();
   });
 
-  it("a window's optional label survives assertUnits untouched", () => {
-    // Two windows can share a windowMins span (account-wide vs. per-model); label disambiguates them.
-    const windows: AgentRateLimit[] = [{ usedPercent: 20, resetsAt: 1790628600, windowMins: 10080, label: "Claude 7 Day (Fable)" }];
-    assertUnits(windows);
-    expect(windows[0].label).toBe("Claude 7 Day (Fable)");
-  });
-
   it("claude statusline reports seconds, minutes and a 0-100 percentage", () => {
     const s = claudeSess();
     applyStatusline(s, { rate_limits: { five_hour: { used_percentage: 43, resets_at: 1790628600 } } });

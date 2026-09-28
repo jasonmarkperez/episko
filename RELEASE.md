@@ -161,12 +161,18 @@ Tick these in order — each depends on the one above.
       again: confirm the pane's mode chip shows *Always ask*. Close the pane and check
       `ps aux | grep omp` for an orphan. OMP claims no approval routing, history or
       resume, so the permission card, history and resume steps are not part of this check.
-- [ ] **A reload keeps a pane's identity, not just its scrollback.** With an agent
-      session live and a turn spent, Settings › Diagnostics › **Reload**. The pane comes
-      back with its scrollback, and its **cost figure keeps climbing from where it was**
-      rather than jumping or resetting. The backend latches the provider's conversation
-      id (`Session.resume_id`) so adoption no longer falls back to the pane id; that
-      fallback silently re-keyed the cost baseline, which is why the money is the tell.
+- [ ] **A reload keeps OMP's cumulative token reading from double-counting.** Claude and
+      Codex never post to `/agent`, so the backend latch (`Session.resume_id`) only ever
+      fires for OMP — this check exercises nothing on the other two providers, and there
+      is no cost-figure tell: `Sess.cost` is unpersisted module state, so the pane's own
+      number reads the same whether the latch ran or not. The real consumer is
+      `addAgentTokenUsage` (usage.ts): OMP reports a running *total*, not a delta, and the
+      total is only ever counted against the baseline stored under `provider:resumeId`.
+      With an OMP session live and a turn spent, note the footer's **today $x.xx**. Settings
+      › Diagnostics › **Reload**, then send one more prompt. The figure must rise by
+      roughly that turn's own cost — not jump by the whole conversation's total again,
+      which is what an unlatched reload (baseline keyed under the pane id instead, with no
+      prior reading) would double-count.
 
 ### Keyboard, and the sidebar repaint guard
 

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { store } from "./localstorage"; // must precede the subject imports (state.ts reads it at load)
-import { usagePanelHtml } from "../src/usageview";
+import { usagePanelHtml, usageRow } from "../src/usageview";
 import { sessions, setActiveId } from "../src/state";
 import { applyStatusline } from "../src/phase";
-import { rl } from "../src/rl";
+import { forecastWin, rl } from "../src/rl";
 import { CLAUDE_CLI, providerCapabilities, type AgentRateLimit, type Sess } from "../src/types";
 
 function fakeSess(rateLimits: AgentRateLimit[]): Sess {
@@ -77,10 +77,21 @@ describe("usagePanelHtml — per-pane rate-limit windows", () => {
     expect(html).toContain("Claude 7 Day (Fable)</span>");
   });
 
-  it("falls back to the windowMins span when a window has no label", () => {
-    sessions.set("s1", fakeSess([{ usedPercent: 10, resetsAt: null, windowMins: 300 }]));
+  it("falls back to a windowMins-derived name when a window has no label and matches no named span", () => {
+    sessions.set("s1", fakeSess([{ usedPercent: 10, resetsAt: null, windowMins: 600 }]));
     setActiveId("s1");
-    expect(usagePanelHtml()).toContain("5h 0m");
+    expect(usagePanelHtml()).toContain("10h</span>");
+  });
+
+  it("names a zero-length windowMins as an unknown span, not as a literal 0m", () => {
+    // Regression: `len` is 0 for `windowMins: 0`, and `len != null` alone is true for 0 —
+    // the naming must agree with fcWinHtml's own span guard (`len != null && len > 0`).
+    sessions.set("s1", fakeSess([{ usedPercent: 30, resetsAt: null, windowMins: 0 }]));
+    setActiveId("s1");
+    const html = usagePanelHtml();
+    const paneHtml = html.slice(html.indexOf("Pane limits"));
+    expect(paneHtml).toContain("Usage window");
+    expect(paneHtml).not.toContain("0m</span>");
   });
 
   it("draws no elapsed timeline for a window of unknown span (windowMins null), rather than an invented one", () => {
@@ -114,5 +125,31 @@ describe("usagePanelHtml — per-pane rate-limit windows", () => {
     expect(html).not.toMatch(/Burn rate<\/div><div class="fc-v">(?!—)/);
     expect(html).not.toMatch(/Projected @ reset<\/div><div class="fc-v[^"]*">(?!—)/);
     expect(html).not.toMatch(/Time to cap<\/div><div class="fc-v">(?!—)/);
+  });
+});
+
+describe("usageRow — external text reaches an innerHTML sink (footer.ts's renderUsagePop)", () => {
+  // Finding 1: `label` mirrors the Claude CLI's own `display_name` (rl.ts:58), external text
+  // that reaches `usageRow` unescaped before rendering via `innerHTML` (footer.ts).
+  it("escapes label, sub and note so a vendor-supplied string cannot inject markup", () => {
+    const f = forecastWin(50, null, null);
+    const html = usageRow(
+      "<img src=x onerror=alert(1)>",
+      "<b>sub</b>",
+      f,
+      "<script>alert(2)</script>",
+    );
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<b>sub</b>");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;img");
+    expect(html).toContain("&lt;script>");
+  });
+
+  it("leaves a plain label untouched (no double-escaping for an ordinary caller)", () => {
+    const f = forecastWin(50, null, null);
+    const html = usageRow("Session", "5-hour window", f);
+    expect(html).toContain(">Session<");
+    expect(html).toContain(">5-hour window<");
   });
 });

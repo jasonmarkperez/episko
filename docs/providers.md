@@ -124,9 +124,12 @@ adapter that turns `ProviderEvent` into `AgentEvent`s, a manifest row, a
 falls through to no arguments and the pane is silently terminal-only), and a
 `logos.ts` entry — no sidecar and no history/resume plumbing unless the vendor's
 extension system exposes a public transcript to read. The `/agent` route latches
-`Session.resume_id` from `params.sessionId` on whatever event first carries it — never
-from `method` — so the shim must announce its conversation id under that exact key;
-a differently-named key silently falls back to the pane id, with no gate to catch it.
+`Session.resume_id` from `params.sessionId` on every event that carries a non-empty
+one — last write wins, never gated on `method` — so the shim must announce its
+conversation id under that exact key on every relevant event, not just the first;
+a differently-named key silently falls back to the pane id, with no gate to catch it,
+and a later event that carries a CHILD (subagent) conversation id under the same key
+would overwrite the real one just as easily.
 
 ## Pull-request definition of done
 
