@@ -43,13 +43,20 @@ fn process_command(bin: &str) -> Command {
     {
         // Codex is commonly an npm `.cmd` shim. `CreateProcessW` cannot execute a
         // script directly, while a native installation should not pay a shell hop.
+        use std::os::windows::process::CommandExt;
+        // A GUI-subsystem process has no console to inherit; both arms spawn a
+        // console-subsystem child, so both must suppress the window it would allocate.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let lower = bin.to_ascii_lowercase();
         if lower.ends_with(".exe") || lower.ends_with(".com") {
-            Command::new(bin)
+            let mut cmd = Command::new(bin);
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            cmd
         } else {
             let mut cmd =
                 Command::new(std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string()));
             cmd.args(["/D", "/C", bin]);
+            cmd.creation_flags(CREATE_NO_WINDOW);
             cmd
         }
     }
@@ -1089,6 +1096,44 @@ mod tests {
             json!({ "params": { "thread": { "id": "c", "cwd": "/work", "parentThreadId": "t" } } });
         assert!(thread_matches(&top));
         assert!(!thread_matches(&child));
+    }
+
+    /// A GUI-subsystem process spawning a console child without CREATE_NO_WINDOW flashes a
+    /// console window. Not observable from CI on either OS, so this reads the source. The
+    /// needle is `process_command`'s own local flag, not `sys_command`'s: a refactor that
+    /// routed through `sys_command` instead would turn this red while behaving identically.
+    #[test]
+    fn process_command_suppresses_the_console_window() {
+        let src = include_str!("agent.rs");
+        let start = src.find("\nfn process_command(").expect("process_command exists") + 1;
+        let body_start = start + src[start..].find('{').expect("function has a body");
+        let mut depth = 0i32;
+        let mut end = body_start;
+        for (i, c) in src[body_start..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = body_start + i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[start..end];
+        let (fast_path, shim_path) = body
+            .split_once("} else {")
+            .expect("process_command still branches into a native fast path and a shim path");
+        assert!(
+            fast_path.contains("creation_flags"),
+            "the native .exe/.com fast path must set CREATE_NO_WINDOW; see platform::sys_command"
+        );
+        assert!(
+            shim_path.contains("creation_flags"),
+            "the cmd.exe shim path must set CREATE_NO_WINDOW; see platform::sys_command"
+        );
     }
 
     #[test]
