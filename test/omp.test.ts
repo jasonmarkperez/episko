@@ -202,4 +202,36 @@ describe("ompEvents", () => {
     expect(Object.keys(saved).length).toBeLessThanOrEqual(500);
     expect(saved["bound-pane-504"]).toBe(1);
   });
+
+  it("does not evict the pane it was just asked to save, even loaded already over the cap", async () => {
+    const seeded: Record<string, number> = {};
+    for (let i = 0; i < 501; i++) seeded[`p${i}`] = 1; // p0 is the oldest/front entry
+    store.set("cc-omp-cost", JSON.stringify(seeded));
+    vi.resetModules();
+    const fresh = await import("../src/providers/omp");
+    const out = fresh.ompEvents({
+      sessionId: "p0", provider: "omp", method: "message_end",
+      params: { message: { role: "assistant",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 2 } } } },
+      requestId: null,
+    });
+    expect(out.find((e) => e.type === "cost")).toMatchObject({ totalUsd: 3 });
+    const saved = JSON.parse(store.get("cc-omp-cost")!);
+    expect(saved["p0"]).toBe(3);
+  });
+
+  it("discards a legacy {tid, sum} cost entry instead of stringifying it", async () => {
+    store.set("cc-omp-cost", JSON.stringify({ "legacy-pane": { tid: "x", sum: 1.23 } }));
+    vi.resetModules();
+    const fresh = await import("../src/providers/omp");
+    const out = fresh.ompEvents({
+      sessionId: "legacy-pane", provider: "omp", method: "message_end",
+      params: { message: { role: "assistant",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.05 } } } },
+      requestId: null,
+    });
+    const cost = out.find((e) => e.type === "cost") as { totalUsd: number };
+    expect(typeof cost.totalUsd).toBe("number");
+    expect(cost.totalUsd).toBeCloseTo(0.05);
+  });
 });

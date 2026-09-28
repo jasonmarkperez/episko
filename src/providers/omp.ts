@@ -67,15 +67,25 @@ function usageEvent(pane: string): AgentEvent {
 // The running $ total, keyed by pane (the launch id every event carries). Persisted because a
 // webview reload (./actions reloadUi) drops this module's state but not the OMP process, so the
 // next message_end must not restart the sum from zero. Capped like `cc-cost-base`'s
-// COST_BASE_MAX (usage.ts): `Map.set` on an existing key keeps its original position, so
-// eviction from the front is a usable LRU without a separate timestamp field.
+// COST_BASE_MAX (usage.ts): entries are re-inserted on every write via `bumpCost`, so the
+// front of the map is genuinely the least-recently-written pane.
 const COST_KEY = "cc-omp-cost";
 const COST_MAX = 500;
 let paneCost: Map<string, number> | null = null;
 // Lazy: a module-scope read would hit `localStorage` at import time, before a real page
 // (or a test's polyfill) has necessarily set the global.
 function costMap(): Map<string, number> {
-  return paneCost ??= new Map(Object.entries(readObj<number>(COST_KEY)));
+  return paneCost ??= new Map(Object.entries(readObj<number>(COST_KEY))
+    // A value written by an older build (or hand-edited) is discarded on its own: a
+    // non-number here would turn the next sum into string concatenation.
+    .filter(([, v]) => typeof v === "number" && Number.isFinite(v)));
+}
+// Re-inserting moves a pane to the back: a live pane that is merely old is never the front,
+// and a write can never be undone by its own save.
+function bumpCost(pane: string, sum: number) {
+  const map = costMap();
+  map.delete(pane);
+  map.set(pane, sum);
 }
 function saveCost() {
   const map = costMap();
@@ -101,7 +111,7 @@ export function ompEvents(event: ProviderEvent): AgentEvent[] {
     case "session_start": {
       tokenTotal.set(pane, ZERO_BREAKDOWN);
       lastContext.delete(pane);
-      costMap().set(pane, 0);
+      bumpCost(pane, 0);
       saveCost();
       const out: AgentEvent[] = [{
         type: "thread", id: text(p.sessionId), model: text(p.model), title: text(p.title),
@@ -167,7 +177,7 @@ export function ompEvents(event: ProviderEvent): AgentEvent[] {
         const prevSum = costMap().get(pane) ?? 0;
         const sum = spent !== 0 ? prevSum + spent : prevSum;
         // A zero-cost reading changes nothing, so it must not rewrite an identical blob.
-        if (spent !== 0) { costMap().set(pane, sum); saveCost(); }
+        if (spent !== 0) { bumpCost(pane, sum); saveCost(); }
         out.push({ type: "cost", totalUsd: sum });
       }
       return out;
