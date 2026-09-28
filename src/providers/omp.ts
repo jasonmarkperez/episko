@@ -2,7 +2,8 @@
 // ./instrument forwards raw payloads; every decision about what they mean lives here.
 
 import type { AgentEvent, AgentFileTouch, ProviderEvent } from "../agents";
-import type { AgentPermissionMode, AgentTokenBreakdown, AgentTokenUsage, Todo, TouchKind } from "../types";
+import { readObj } from "../store";
+import type { AgentPermissionMode, AgentTokenBreakdown, Todo, TouchKind } from "../types";
 
 // Ids only; the backend maps each to a whitelist and none is passed through as argv.
 export const OMP_PERMISSION_MODES: readonly AgentPermissionMode[] = [
@@ -14,6 +15,7 @@ export const OMP_PERMISSION_MODES: readonly AgentPermissionMode[] = [
 
 const obj = (v: unknown): Record<string, any> => v && typeof v === "object" ? v as Record<string, any> : {};
 const text = (v: unknown, fallback = "") => typeof v === "string" ? v : fallback;
+const num = (v: unknown) => Number.isFinite(v) ? Number(v) : 0;
 const clip = (v: unknown, n = 12_000): string => {
   if (v == null) return "";
   const s = typeof v === "string" ? v : JSON.stringify(v, null, 2);
@@ -33,23 +35,48 @@ function fileTouches(tool: string, input: Record<string, any>): AgentFileTouch[]
   return kind && path ? [{ path, kind }] : [];
 }
 
-const costs = new Map<string, number>();
+const ZERO_BREAKDOWN: AgentTokenBreakdown = {
+  totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0,
+  outputTokens: 0, reasoningOutputTokens: 0,
+};
+const addBreakdown = (a: AgentTokenBreakdown, b: AgentTokenBreakdown): AgentTokenBreakdown => ({
+  totalTokens: a.totalTokens + b.totalTokens, inputTokens: a.inputTokens + b.inputTokens,
+  cachedInputTokens: a.cachedInputTokens + b.cachedInputTokens,
+  cacheWriteInputTokens: a.cacheWriteInputTokens + b.cacheWriteInputTokens,
+  outputTokens: a.outputTokens + b.outputTokens, reasoningOutputTokens: a.reasoningOutputTokens + b.reasoningOutputTokens,
+});
 
-function usageFrom(context: unknown, message: unknown): AgentTokenUsage {
-  const c = obj(context);
-  const u = obj(obj(message).usage);
-  const n = (v: unknown) => Number.isFinite(v) ? Number(v) : 0;
-  const last: AgentTokenBreakdown = {
-    totalTokens: n(c.tokens) || n(u.input) + n(u.output),
-    inputTokens: n(u.input), cachedInputTokens: n(u.cacheRead),
-    cacheWriteInputTokens: n(u.cacheWrite), outputTokens: n(u.output),
-    reasoningOutputTokens: 0,
-  };
+// Keyed by pane (the launch id every event carries): the real context occupancy, last seen
+// from session_start/agent_end, and the running token total across this thread's messages.
+// message_end has neither on its own, and must not blank the gauge or restart the counter.
+const lastContext = new Map<string, { tokens: number; contextWindow: number | null }>();
+const tokenTotal = new Map<string, AgentTokenBreakdown>();
+
+function usageEvent(pane: string): AgentEvent {
+  const c = lastContext.get(pane);
   return {
-    total: last, last,
-    contextWindow: Number.isFinite(c.contextWindow) ? Number(c.contextWindow) : null,
+    type: "usage",
+    usage: {
+      total: tokenTotal.get(pane) ?? ZERO_BREAKDOWN,
+      last: { ...ZERO_BREAKDOWN, totalTokens: c?.tokens ?? 0 },
+      contextWindow: c?.contextWindow ?? null,
+    },
   };
 }
+
+// The running $ total, keyed by pane and carrying which OMP conversation it belongs to:
+// only session_start learns the conversation id, later events see only the pane. Persisted
+// because a webview reload (./actions reloadUi) drops this module's state but not the OMP
+// process, so the next message_end must not restart the sum from zero.
+interface PaneCost { tid: string; sum: number }
+const COST_KEY = "cc-omp-cost";
+let paneCost: Map<string, PaneCost> | null = null;
+// Lazy: a module-scope read would hit `localStorage` at import time, before a real page
+// (or a test's polyfill) has necessarily set the global.
+function costMap(): Map<string, PaneCost> {
+  return paneCost ??= new Map(Object.entries(readObj<PaneCost>(COST_KEY)));
+}
+const saveCost = () => localStorage.setItem(COST_KEY, JSON.stringify(Object.fromEntries(costMap())));
 
 function todosFrom(input: Record<string, any>): Todo[] {
   const list = Array.isArray(input.list) ? input.list : [];
@@ -64,12 +91,19 @@ function todosFrom(input: Record<string, any>): Todo[] {
 
 export function ompEvents(event: ProviderEvent): AgentEvent[] {
   const p = obj(event.params);
+  const pane = event.sessionId;
   switch (event.method) {
     case "session_start": {
+      tokenTotal.set(pane, ZERO_BREAKDOWN);
+      costMap().set(pane, { tid: text(p.sessionId) || pane, sum: 0 });
+      saveCost();
       const out: AgentEvent[] = [{
         type: "thread", id: text(p.sessionId), model: text(p.model), title: text(p.title),
       }];
-      if (p.context) out.push({ type: "usage", usage: usageFrom(p.context, null) });
+      if (p.context) {
+        lastContext.set(pane, { tokens: num(p.context.tokens), contextWindow: Number.isFinite(p.context.contextWindow) ? Number(p.context.contextWindow) : null });
+        out.push(usageEvent(pane));
+      }
       return out;
     }
     case "before_agent_start":
@@ -83,16 +117,20 @@ export function ompEvents(event: ProviderEvent): AgentEvent[] {
       const out: AgentEvent[] = [{
         type: "turn-completed", failed: false, detail: "", durationMs: null,
       }];
-      if (p.context) out.push({ type: "usage", usage: usageFrom(p.context, null) });
+      if (p.context) {
+        lastContext.set(pane, { tokens: num(p.context.tokens), contextWindow: Number.isFinite(p.context.contextWindow) ? Number(p.context.contextWindow) : null });
+        out.push(usageEvent(pane));
+      }
       return out;
     }
     case "tool_call": {
       const tool = text(p.toolName);
       const input = obj(p.input);
-      const arg = text(input.path ?? input.file_path ?? input.command ?? input.pattern);
+      const pathArg = text(input.path ?? input.file_path);
+      const arg = pathArg ? leaf(pathArg) : text(input.command ?? input.pattern);
       const out: AgentEvent[] = [{
         type: "activity-started", id: text(p.toolCallId), tool,
-        arg: arg ? leaf(arg) : "", input: clip(input), desc: "",
+        arg, input: clip(input), desc: "",
       }];
       if (tool === "todo") out.push({ type: "plan", todos: todosFrom(input) });
       return out;
@@ -109,13 +147,22 @@ export function ompEvents(event: ProviderEvent): AgentEvent[] {
     case "message_end": {
       const message = obj(p.message);
       if (message.role !== "assistant") return [];
-      const usage = usageFrom(null, message);
-      const spent = Number(obj(obj(message.usage).cost).total);
-      const out: AgentEvent[] = [{ type: "usage", usage }];
+      const u = obj(message.usage);
+      const delta: AgentTokenBreakdown = {
+        totalTokens: num(u.input) + num(u.output) + num(u.cacheRead) + num(u.cacheWrite),
+        inputTokens: num(u.input), cachedInputTokens: num(u.cacheRead),
+        cacheWriteInputTokens: num(u.cacheWrite), outputTokens: num(u.output),
+        reasoningOutputTokens: 0,
+      };
+      tokenTotal.set(pane, addBreakdown(tokenTotal.get(pane) ?? ZERO_BREAKDOWN, delta));
+      const out: AgentEvent[] = [usageEvent(pane)];
+      const spent = Number(obj(u.cost).total);
       if (Number.isFinite(spent)) {
-        const total = (costs.get(event.sessionId) ?? 0) + spent;
-        costs.set(event.sessionId, total);
-        out.push({ type: "cost", totalUsd: total });
+        const prev = costMap().get(pane);
+        const entry: PaneCost = { tid: prev?.tid ?? pane, sum: (prev?.sum ?? 0) + spent };
+        costMap().set(pane, entry);
+        saveCost();
+        out.push({ type: "cost", totalUsd: entry.sum });
       }
       return out;
     }
@@ -129,6 +176,7 @@ export function ompEvents(event: ProviderEvent): AgentEvent[] {
     case "auto_retry_start":
       return [{ type: "thread-status", status: "active", waiting: false }];
     case "session_shutdown":
+      lastContext.delete(pane); tokenTotal.delete(pane); costMap().delete(pane); saveCost();
       return [{ type: "disconnected" }];
     default:
       return [];

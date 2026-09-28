@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { store } from "./localstorage"; // must precede modules that read localStorage
 import { ompEvents } from "../src/providers/omp";
 import type { AgentEvent } from "../src/agents";
 
@@ -6,6 +7,8 @@ const ev = (method: string, params: unknown, sessionId = "s1") =>
   ompEvents({ sessionId, provider: "omp", method, params, requestId: null });
 
 const kinds = (out: AgentEvent[]) => out.map((e) => e.type);
+
+beforeEach(() => store.clear());
 
 describe("ompEvents", () => {
   it("opens a thread from session_start", () => {
@@ -117,5 +120,64 @@ describe("ompEvents", () => {
 
   it("drops an unknown method rather than inventing state", () => {
     expect(ev("some_future_omp_event", { a: 1 })).toEqual([]);
+  });
+
+  it("keeps the real context reading on a message_end usage event", () => {
+    ev("session_start", { sessionId: "ctx-thread", model: "m", title: "t",
+      context: { tokens: 5000, contextWindow: 200000, percent: 2.5 } }, "ctx-pane");
+    const out = ev("message_end", { message: { role: "assistant",
+      usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } } } }, "ctx-pane");
+    const usage = out.find((e) => e.type === "usage");
+    expect(usage && usage.type === "usage" && usage.usage.contextWindow).toBe(200000);
+    expect(usage && usage.type === "usage" && usage.usage.last.totalTokens).toBe(5000);
+  });
+
+  it("grows the token total across messages instead of alternating shapes", () => {
+    ev("session_start", { sessionId: "tok-thread", model: "m", title: "t",
+      context: { tokens: 0, contextWindow: 100000, percent: 0 } }, "tok-pane");
+    const one = ev("message_end", { message: { role: "assistant",
+      usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } }, "tok-pane");
+    const two = ev("message_end", { message: { role: "assistant",
+      usage: { input: 50, output: 10, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } }, "tok-pane");
+    const u1 = one.find((e) => e.type === "usage");
+    const u2 = two.find((e) => e.type === "usage");
+    expect(u1 && u1.type === "usage" && u1.usage.total.totalTokens).toBe(120);
+    expect(u2 && u2.type === "usage" && u2.usage.total.totalTokens).toBe(180);
+  });
+
+  it("keeps the running cost across a reload (module state resets, storage does not)", async () => {
+    ev("session_start", { sessionId: "reload-thread", model: "m", title: "t", context: null }, "reload-pane");
+    ev("message_end", { message: { role: "assistant",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 3 } } } }, "reload-pane");
+    vi.resetModules();
+    // Dynamic on purpose: reloadUi() drops this module's state, so the test needs a second,
+    // independently-initialized instance sharing only the real localStorage backing.
+    const fresh = await import("../src/providers/omp");
+    const out = fresh.ompEvents({
+      sessionId: "reload-pane", provider: "omp", method: "message_end",
+      params: { message: { role: "assistant",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 2 } } } },
+      requestId: null,
+    });
+    expect(out.find((e) => e.type === "cost")).toMatchObject({ totalUsd: 5 });
+  });
+
+  it("resets the running cost when a new thread starts in the same pane", () => {
+    ev("session_start", { sessionId: "thread-a", model: "m", title: "t", context: null }, "shared-pane");
+    ev("message_end", { message: { role: "assistant",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 4 } } } }, "shared-pane");
+    ev("session_start", { sessionId: "thread-b", model: "m", title: "t", context: null }, "shared-pane");
+    const out = ev("message_end", { message: { role: "assistant",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 1 } } } }, "shared-pane");
+    expect(out.find((e) => e.type === "cost")).toMatchObject({ totalUsd: 1 });
+  });
+
+  it("keeps a shell command intact rather than trimming it to a path leaf", () => {
+    const out = ev("tool_call", { toolCallId: "t9", toolName: "bash", input: { command: "cd /repo && pnpm test" } });
+    expect(out[0]).toMatchObject({ type: "activity-started", arg: "cd /repo && pnpm test" });
+  });
+
+  it("closes the turn when isTerminal is entirely absent, not just when true", () => {
+    expect(ev("agent_end", {})[0]).toMatchObject({ type: "turn-completed" });
   });
 });
