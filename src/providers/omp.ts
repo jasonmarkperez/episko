@@ -154,7 +154,7 @@ export function ompEvents(event: ProviderEvent): AgentEvent[] {
       if (Number.isFinite(spent)) {
         const sum = (paneCost.get(pane) ?? 0) + spent;
         paneCost.set(pane, sum);
-        out.push({ type: "cost", totalUsd: sum });
+        out.push({ type: "cost", totalUsd: sum, resets: true }); // module memory, not a revised estimate
       }
       return out;
     }
