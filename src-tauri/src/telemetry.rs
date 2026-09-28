@@ -1020,6 +1020,61 @@ mod tests {
         assert!(ev["requestId"].is_null());
     }
 
+    /// Executed, never read: a test that inspects the generated shim agrees with our intent,
+    /// and the intent is what breaks. Zero model tokens — rpc mode reaches session_start
+    /// without a provider turn. Skips where omp is not installed.
+    #[test]
+    fn omp_shim_posts_agent_events() {
+        use tauri::Listener;
+        let Some(bin) = crate::pty::resolve_cli("omp") else {
+            eprintln!("omp_shim_posts_agent_events: SKIPPED (omp not found on PATH)");
+            return;
+        };
+        let (app, port) = mock_telemetry_app();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.listen("agent-event", move |e| {
+            let _ = tx.send(e.payload().to_string());
+        });
+        let next = || -> serde_json::Value {
+            let raw = rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("server emitted no agent-event");
+            serde_json::from_str(&raw).expect("event payload should be json")
+        };
+
+        let sid = format!("test-{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst));
+        let args = write_instrument("omp", port, &sid).expect("shim");
+
+        let child = std::process::Command::new(&bin)
+            .args(["--mode", "rpc", "--no-ui", "--no-session"])
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("omp failed to start");
+        // Reaps on every exit path, including a panicking assertion below: an omp that
+        // never exits on stdin EOF must not be orphaned just because the test failed.
+        struct Reap(std::process::Child, String);
+        impl Drop for Reap {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+                let _ = std::fs::remove_file(&self.1);
+            }
+        }
+        let _reap = Reap(child, args[1].clone());
+
+        let ev = next();
+        assert_eq!(ev["sessionId"], sid, "the stable launch id must ride the header");
+        assert_eq!(ev["provider"], "omp");
+        assert_eq!(ev["method"], "session_start");
+        assert!(
+            ev["params"]["context"]["contextWindow"].as_u64().unwrap_or(0) > 0,
+            "expected a positive contextWindow in {ev}"
+        );
+    }
+
     /// The shim is materialized per launch with the port and stable id substituted, and the
     /// returned args are what loads it. No placeholder may survive into the written file.
     #[test]
