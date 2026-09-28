@@ -172,6 +172,7 @@ export interface AgentRateLimit {
   usedPercent: number;        // 0-100, not a 0-1 fraction; test/units.test.ts guards all three
   resetsAt: number | null;    // epoch SECONDS (rl.ts compares reset * 1000 to Date.now())
   windowMins: number | null;  // MINUTES (footer.ts passes windowMins * 60 as seconds)
+  label?: string;             // when the span alone cannot name the window
 }
 // Providers can raise several at once, so Sess keeps a queue; the legacy scalars mirror its head.
 export interface PendingPermission {

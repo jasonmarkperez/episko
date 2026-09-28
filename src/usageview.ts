@@ -338,9 +338,10 @@ function scopedBlockHtml(): string {
       ${wins.map((w) => fcWinHtml(esc(w.label), "weekly · this model", w.forecast, null, D7_LEN, "%/day", note)).join("")}
     </div>`;
 }
-// Codex/OMP report windows scoped to one pane, not the account. AgentRateLimit carries no
-// name field, so a row is named from its span; a single reading has no slope behind it,
-// so this is a level and reset time only — never a forecast, matching docs/providers.md.
+// Codex/OMP report windows scoped to one pane, not the account. Two windows can share a span
+// (an account-wide 7-day window and a per-model 7-day window), which is why `label` wins when
+// a provider supplies one; a single reading has no slope behind it, so this is a level and
+// reset time only — never a forecast, matching docs/providers.md.
 function paneLimitsBlockHtml(): string {
   const s = activeId ? sessions.get(activeId) : null;
   const wins = s?.rateLimits ?? [];
@@ -350,7 +351,7 @@ function paneLimitsBlockHtml(): string {
     <div class="fc-grid">
       ${wins.map((w) => {
         const len = w.windowMins != null ? w.windowMins * 60 : D7_LEN;
-        const name = w.windowMins != null ? fmtSpan(len) : "Usage window";
+        const name = w.label ? esc(w.label) : w.windowMins != null ? fmtSpan(len) : "Usage window";
         return fcWinHtml(name, "this pane's window", forecastWin(w.usedPercent, w.resetsAt, null, len), null, len, "%/day", note);
       }).join("")}
     </div>`;
