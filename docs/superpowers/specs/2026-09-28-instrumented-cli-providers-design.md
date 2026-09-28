@@ -194,9 +194,15 @@ followed by a second prompt in the pane. Episko could only own approvals by laun
 to load leaves a session running unguarded.
 
 So `tool_approval_requested` / `_resolved` are observed and mapped to
-`thread-status { waiting }`. The pane badges attention and sorts up the sidebar; you
-answer in the TUI. This is `docs/providers.md`'s intentional terminal-only fallback, and
-it fabricates nothing.
+`thread-status { waiting }`. **This does not badge attention**, and an earlier draft of
+this spec was wrong to say it does: the shared reducer acts on `thread-status` only when
+`status === "active" && !waiting` or when `status === "idle"`, so a waiting reading takes
+neither branch and `needsYou` — which decides the badge from `s.attention` and the phase —
+never sees it. What the emission does earn is real but smaller: the pane does not park at
+`idle` while OMP waits, so it floats up by recency rather than looking dormant. Badging
+would require either claiming the `permissions` capability or adding a neutral event, and
+inventing a phase to fake it is precisely the fabricated state `docs/providers.md` forbids.
+You answer in the TUI.
 
 Episko-owned approvals remain addable later behind a setting: OMP's handlers are async,
 so the gate would be a real promise rather than a held-open HTTP request. The mapping
