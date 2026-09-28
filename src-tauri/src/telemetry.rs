@@ -163,6 +163,13 @@ pub(crate) fn run_telemetry_server<R: Runtime>(server: tiny_http::Server, app: A
                                 s.resume_id = Some(conv_id);
                             }
                         }
+                    } else {
+                        // Length only, never the value — this route must never log a body, and a
+                        // conversation id can carry a prompt.
+                        log::warn!(
+                            "telemetry: rejected agent conversation id ({} bytes) — see docs/providers.md",
+                            conv_id.len()
+                        );
                     }
                 }
             }

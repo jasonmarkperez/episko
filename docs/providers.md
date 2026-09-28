@@ -127,7 +127,9 @@ extension system exposes a public transcript to read. The `/agent` route latches
 `Session.resume_id` from `params.sessionId` on every event that carries a non-empty
 one — last write wins, never gated on `method` — so the shim must announce its
 conversation id under that exact key on every relevant event, not just the first;
-a differently-named key silently falls back to the pane id, with no gate to catch it,
+a differently-named key silently falls back to the pane id — with no gate to catch it
+beyond a `warn` log naming only the rejected id's length, since the id must be
+non-empty, at most 128 bytes and `[A-Za-z0-9-]` only (`valid_session_id`) —
 and a later event that carries a CHILD (subagent) conversation id under the same key
 would overwrite the real one just as easily.
 
