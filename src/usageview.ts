@@ -7,6 +7,7 @@ import { esc, fmtClock, fmtMb, fmtRate, fmtSpan, fmtUntil, uDelta, uTok, uUsd, u
 import { popGoHtml } from "./footerview";
 import { D7_LEN, forecast5h, forecast7d, forecastWin, H5_LEN, rlScoped, scopedForecasts, type Forecast } from "./rl";
 import { accentFor, activeId, ioAll, sessions } from "./state";
+import { providerAdapter } from "./providers";
 import { hasAgentCapability } from "./types";
 import {
   dayIo, ioDayCount, ioSameNote, ioTotal, modelSeries, todayKey, tokenDays, U_MONTHS, uBuckets,
@@ -267,15 +268,17 @@ function uProjects(): string {
 }
 
 // One window of the forecast card. Reads the same forecast() the footer and popup use.
-function fcWinHtml(name: string, sub: string, f: Forecast, burnPerHr: number | null, len: number, burnUnit: string, note?: string): string {
+function fcWinHtml(name: string, sub: string, f: Forecast, burnPerHr: number | null, len: number | null, burnUnit: string, note?: string): string {
   const cls = f.used == null ? "" : "s-" + f.status;
   const pctTxt = f.used == null ? "–" : Math.round(f.used) + "%";
   const usedW = f.used == null ? 0 : Math.min(100, Math.max(0, f.used));
   const projW = f.proj == null ? usedW : Math.min(100, Math.max(0, f.proj));
   const ghostW = Math.max(0, projW - usedW);
-  const elapsed = f.secLeft != null ? len - f.secLeft : 0;
-  const elapsedPct = Math.min(100, Math.max(0, elapsed / len * 100));
-  const outPct = (f.runsOut && f.etaSec != null && f.secLeft != null)
+  // A window of unknown span (len null) draws no elapsed timeline rather than one measured
+  // against an invented length.
+  const elapsed = len != null && f.secLeft != null ? len - f.secLeft : 0;
+  const elapsedPct = len != null ? Math.min(100, Math.max(0, elapsed / len * 100)) : 0;
+  const outPct = (len != null && f.runsOut && f.etaSec != null && f.secLeft != null)
     ? Math.min(100, Math.max(0, (elapsed + f.etaSec) / len * 100)) : null;
   const vc = verdictChip(f);
   const verdict = (f.used != null && f.used >= 100) ? `<span class="vchip s-bad">at cap</span>`
@@ -344,15 +347,18 @@ function scopedBlockHtml(): string {
 // reset time only — never a forecast, matching docs/providers.md.
 function paneLimitsBlockHtml(): string {
   const s = activeId ? sessions.get(activeId) : null;
-  const wins = s?.rateLimits ?? [];
+  // A provider whose adapter forecasts its own windows (Claude) is already metered above,
+  // from the same s.rateLimits mirror (phase.ts) — footer.ts:70 makes the identical split.
+  if (!s || providerAdapter(s.provider ?? "")?.rateLimitForecasts?.()?.length) return "";
+  const wins = s.rateLimits;
   if (!wins.length) return "";
   const note = "Reported by this pane, not the account. A single reading carries no pace, so this is the level only.";
   return `<div class="label" style="margin-top:15px">Pane limits <span class="fc-hint">· this pane's own rate-limit windows</span></div>
     <div class="fc-grid">
       ${wins.map((w) => {
-        const len = w.windowMins != null ? w.windowMins * 60 : D7_LEN;
-        const name = w.label ? esc(w.label) : w.windowMins != null ? fmtSpan(len) : "Usage window";
-        return fcWinHtml(name, "this pane's window", forecastWin(w.usedPercent, w.resetsAt, null, len), null, len, "%/day", note);
+        const len = w.windowMins != null ? w.windowMins * 60 : null;
+        const name = w.label ? esc(w.label) : len != null ? fmtSpan(len) : "Usage window";
+        return fcWinHtml(name, "this pane's window", forecastWin(w.usedPercent, w.resetsAt, null, len ?? undefined), null, len, "%/day", note);
       }).join("")}
     </div>`;
 }
@@ -363,8 +369,7 @@ export function usagePanelHtml(): string {
       <p class="u-hint">Every session Episko launches, account-wide. History stays on this machine.</p></div>
       <div class="u-range">${ranges}</div></header>
     ${uTiles()}
-    ${forecastBlockHtml()}
-    ${paneLimitsBlockHtml()}
+    ${forecastBlockHtml()}${paneLimitsBlockHtml()}
     ${uHeatmap()}
     <div class="u-cols">${uBars()}<section class="u-card">${uModelMix()}${uTokenMix()}</section></div>
     ${uProjects()}
