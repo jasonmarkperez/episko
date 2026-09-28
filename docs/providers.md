@@ -6,7 +6,8 @@ capabilities; only provider adapters depend on vendor protocols.
 ```text
 Claude hooks/statusLine ─┐
                         ├─ provider-neutral state/events ─ Sess ─ shared UI
-Codex App Server ───────┘
+Codex App Server ───────┤
+OMP extension shim ─────┘
 ```
 
 An agent with no structured integration still gets the PTY, worktree, project,
@@ -129,7 +130,7 @@ For any change that touches agent sessions:
 
 - Shared behavior is provider-neutral and has no new vendor branch.
 - Capability claims match what every adapter can actually supply.
-- Claude and Codex still pass their relevant fixtures.
+- Claude, Codex and OMP still pass their relevant fixtures.
 - Terminal-only agents degrade intentionally.
 - History and resume retain the original provider identity.
 - Cumulative values such as cost do not double-count after resume.
