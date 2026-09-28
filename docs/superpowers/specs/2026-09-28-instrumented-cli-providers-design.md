@@ -220,10 +220,12 @@ be fabricated state.
 
 ## Lifecycle and failure
 
-The shim file is written per launch under `$TMPDIR/cc-launcher/` and removed on the same
-reaper path that drops Claude's instrument file. There is **no runtime to stop**:
-`stop_provider` for `omp` is a no-op, because no sidecar child exists. That is the main
-structural saving over Codex.
+The shim file is written per launch under `$TMPDIR/cc-launcher/`, beside Claude's
+`instrument-<uuid>.json`, and like it is **not** deleted at runtime: nothing in the
+backend removes those files today, and the OS owns that directory. Matching the
+precedent keeps one story rather than two. There is also **no runtime to stop** —
+`stop_runtime` finds no entry for an `omp` pane, because no sidecar child exists. That
+is the main structural saving over Codex.
 
 If the shim never loads, no POST ever arrives and the pane is a live terminal with no
 telemetry — which is precisely the terminal-only fallback, degrading honestly rather
