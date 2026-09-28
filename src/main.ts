@@ -799,7 +799,11 @@ $("dbgClear").addEventListener("click", () => { dbgLog.length = 0; telem.rx = te
 $("dbgCopy").addEventListener("click", async () => {
   try { await writeText(JSON.stringify(dbgSnapshot(), null, 2)); toast("Debug snapshot copied"); } catch { toast("copy failed"); }
 });
-window.addEventListener("error", (e) => dlog("error", `js error: ${e.message} @ ${(e.filename || "").split("/").pop()}:${e.lineno}`));
+// The stack, not just the line: a production bundle puts whole modules on one line, so
+// `@index-abc.js:167` names 135KB of code and cannot be acted on.
+window.addEventListener("error", (e) => dlog("error",
+  `js error: ${e.message} @ ${(e.filename || "").split("/").pop()}:${e.lineno}:${e.colno}`
+  + `${e.error?.stack ? `\n${e.error.stack}` : ""}`));
 window.addEventListener("unhandledrejection", (e) => dlog("error", `unhandled rejection: ${String((e as PromiseRejectionEvent).reason)}`));
 dlog("info", "app started");
 flushDebug();

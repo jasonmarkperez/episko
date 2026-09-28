@@ -17,8 +17,13 @@ export default defineConfig(async () => ({
   // and useless for anything past that. This is the switch that makes a profile name our
   // own functions. It stays off by default because a normal release has no reason to ship
   // the source of every module beside it.
+  // **terser, because esbuild miscompiles xterm and only in a release build.** Lowering
+  // `||=` (which our inherited es2020 `target` forces; es2021+ is clean) turns the enum init
+  // in `requestMode`, the DECRQM handler, into an assignment whose declaration is dropped —
+  // so the first `CSI ? Ps $ p` from any TUI throws out of `_innerWrite` and the pane never
+  // paints again. test/minify.test.ts fails when esbuild fixes it. evanw/esbuild#4508.
   // @ts-expect-error process is a nodejs global
-  build: { sourcemap: !!process.env.EPISKO_SOURCEMAP },
+  build: { sourcemap: !!process.env.EPISKO_SOURCEMAP, minify: "terser" },
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,

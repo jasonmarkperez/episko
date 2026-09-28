@@ -17,6 +17,12 @@ Markers: `+` new · `~` changed · `!` fixed
   meter and a running cost total arrive from its own extension system over the `/agent`
   telemetry route; approvals stay in the terminal.
 
+! **A pane went black the moment anything in it asked the terminal a question.** esbuild
+  miscompiled xterm's DECRQM handler, so the first `CSI ? Ps $ p` threw and killed that
+  pane's output for the life of the process. Every pane was affected — `vim`, `htop` or
+  `less` in an ordinary shell pane trip it as surely as an agent does — but only in a
+  packaged build, since dev builds are unminified. Release builds now minify with terser.
+
 ## 0.31.0 — 2026-09-23
 A session row in the sidebar has its own menu, ✕ on a port stops a server nobody else
 could, *What's next* folds sixteen bot pull requests into one row, and the all-projects

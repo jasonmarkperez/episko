@@ -2418,7 +2418,8 @@ select.in-ctl { cursor: pointer; }
 .dl { display: grid; grid-template-columns: 70px 40px 1fr; gap: 8px; padding: 2px 4px; font-size: 10.5px; border-radius: 4px; }
 .dl-t { color: var(--muted-2); }
 .dl-l { text-transform: uppercase; font-size: 8.5px; font-weight: 700; align-self: center; color: var(--muted-2); }
-.dl-m { color: var(--muted); word-break: break-word; }
+/* pre-wrap: a js error's message now carries its stack, and the panel exists to read it. */
+.dl-m { color: var(--muted); word-break: break-word; white-space: pre-wrap; }
 .dl.warn { background: color-mix(in srgb, var(--st-working) 12%, transparent); }
 .dl.warn .dl-l, .dl.warn .dl-m { color: var(--st-working); }
 .dl.error { background: color-mix(in srgb, var(--st-error) 14%, transparent); }
