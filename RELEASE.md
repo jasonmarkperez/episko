@@ -161,6 +161,12 @@ Tick these in order — each depends on the one above.
       again: confirm the pane's mode chip shows *Always ask*. Close the pane and check
       `ps aux | grep omp` for an orphan. OMP claims no approval routing, history or
       resume, so the permission card, history and resume steps are not part of this check.
+- [ ] **A reload keeps a pane's identity, not just its scrollback.** With an agent
+      session live and a turn spent, Settings › Diagnostics › **Reload**. The pane comes
+      back with its scrollback, and its **cost figure keeps climbing from where it was**
+      rather than jumping or resetting. The backend latches the provider's conversation
+      id (`Session.resume_id`) so adoption no longer falls back to the pane id; that
+      fallback silently re-keyed the cost baseline, which is why the money is the tell.
 
 ### Keyboard, and the sidebar repaint guard
 
