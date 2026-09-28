@@ -64,19 +64,24 @@ function usageEvent(pane: string): AgentEvent {
   };
 }
 
-// The running $ total, keyed by pane and carrying which OMP conversation it belongs to:
-// only session_start learns the conversation id, later events see only the pane. Persisted
-// because a webview reload (./actions reloadUi) drops this module's state but not the OMP
-// process, so the next message_end must not restart the sum from zero.
-interface PaneCost { tid: string; sum: number }
+// The running $ total, keyed by pane (the launch id every event carries). Persisted because a
+// webview reload (./actions reloadUi) drops this module's state but not the OMP process, so the
+// next message_end must not restart the sum from zero. Capped like `cc-cost-base`'s
+// COST_BASE_MAX (usage.ts): `Map.set` on an existing key keeps its original position, so
+// eviction from the front is a usable LRU without a separate timestamp field.
 const COST_KEY = "cc-omp-cost";
-let paneCost: Map<string, PaneCost> | null = null;
+const COST_MAX = 500;
+let paneCost: Map<string, number> | null = null;
 // Lazy: a module-scope read would hit `localStorage` at import time, before a real page
 // (or a test's polyfill) has necessarily set the global.
-function costMap(): Map<string, PaneCost> {
-  return paneCost ??= new Map(Object.entries(readObj<PaneCost>(COST_KEY)));
+function costMap(): Map<string, number> {
+  return paneCost ??= new Map(Object.entries(readObj<number>(COST_KEY)));
 }
-const saveCost = () => localStorage.setItem(COST_KEY, JSON.stringify(Object.fromEntries(costMap())));
+function saveCost() {
+  const map = costMap();
+  for (const k of [...map.keys()].slice(0, Math.max(0, map.size - COST_MAX))) map.delete(k);
+  localStorage.setItem(COST_KEY, JSON.stringify(Object.fromEntries(map)));
+}
 
 function todosFrom(input: Record<string, any>): Todo[] {
   const list = Array.isArray(input.list) ? input.list : [];
@@ -95,7 +100,8 @@ export function ompEvents(event: ProviderEvent): AgentEvent[] {
   switch (event.method) {
     case "session_start": {
       tokenTotal.set(pane, ZERO_BREAKDOWN);
-      costMap().set(pane, { tid: text(p.sessionId) || pane, sum: 0 });
+      lastContext.delete(pane);
+      costMap().set(pane, 0);
       saveCost();
       const out: AgentEvent[] = [{
         type: "thread", id: text(p.sessionId), model: text(p.model), title: text(p.title),
@@ -158,11 +164,11 @@ export function ompEvents(event: ProviderEvent): AgentEvent[] {
       const out: AgentEvent[] = [usageEvent(pane)];
       const spent = Number(obj(u.cost).total);
       if (Number.isFinite(spent)) {
-        const prev = costMap().get(pane);
-        const entry: PaneCost = { tid: prev?.tid ?? pane, sum: (prev?.sum ?? 0) + spent };
-        costMap().set(pane, entry);
-        saveCost();
-        out.push({ type: "cost", totalUsd: entry.sum });
+        const prevSum = costMap().get(pane) ?? 0;
+        const sum = spent !== 0 ? prevSum + spent : prevSum;
+        // A zero-cost reading changes nothing, so it must not rewrite an identical blob.
+        if (spent !== 0) { costMap().set(pane, sum); saveCost(); }
+        out.push({ type: "cost", totalUsd: sum });
       }
       return out;
     }

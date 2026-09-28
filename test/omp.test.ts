@@ -132,6 +132,17 @@ describe("ompEvents", () => {
     expect(usage && usage.type === "usage" && usage.usage.last.totalTokens).toBe(5000);
   });
 
+  it("clears the remembered context when a new thread starts without one", () => {
+    ev("session_start", { sessionId: "ctx-old", model: "m", title: "t",
+      context: { tokens: 9000, contextWindow: 100000, percent: 9 } }, "ctx-reset-pane");
+    ev("session_start", { sessionId: "ctx-new", model: "m", title: "t", context: null }, "ctx-reset-pane");
+    const out = ev("message_end", { message: { role: "assistant",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } }, "ctx-reset-pane");
+    const usage = out.find((e) => e.type === "usage");
+    expect(usage && usage.type === "usage" && usage.usage.contextWindow).toBeNull();
+    expect(usage && usage.type === "usage" && usage.usage.last.totalTokens).toBe(0);
+  });
+
   it("grows the token total across messages instead of alternating shapes", () => {
     ev("session_start", { sessionId: "tok-thread", model: "m", title: "t",
       context: { tokens: 0, contextWindow: 100000, percent: 0 } }, "tok-pane");
@@ -179,5 +190,16 @@ describe("ompEvents", () => {
 
   it("closes the turn when isTerminal is entirely absent, not just when true", () => {
     expect(ev("agent_end", {})[0]).toMatchObject({ type: "turn-completed" });
+  });
+
+  it("keeps the persisted cost map bounded past its cap", () => {
+    for (let i = 0; i < 505; i++) {
+      ev("session_start", { sessionId: `bound-${i}`, model: "m", title: "t", context: null }, `bound-pane-${i}`);
+      ev("message_end", { message: { role: "assistant",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 1 } } } }, `bound-pane-${i}`);
+    }
+    const saved = JSON.parse(store.get("cc-omp-cost")!);
+    expect(Object.keys(saved).length).toBeLessThanOrEqual(500);
+    expect(saved["bound-pane-504"]).toBe(1);
   });
 });
