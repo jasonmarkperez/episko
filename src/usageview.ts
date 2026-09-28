@@ -5,8 +5,8 @@
 
 import { esc, fmtClock, fmtMb, fmtRate, fmtSpan, fmtUntil, uDelta, uTok, uUsd, uUsd2 } from "./format";
 import { popGoHtml } from "./footerview";
-import { D7_LEN, forecast5h, forecast7d, H5_LEN, rlScoped, scopedForecasts, type Forecast } from "./rl";
-import { accentFor, ioAll, sessions } from "./state";
+import { D7_LEN, forecast5h, forecast7d, forecastWin, H5_LEN, rlScoped, scopedForecasts, type Forecast } from "./rl";
+import { accentFor, activeId, ioAll, sessions } from "./state";
 import { hasAgentCapability } from "./types";
 import {
   dayIo, ioDayCount, ioSameNote, ioTotal, modelSeries, todayKey, tokenDays, U_MONTHS, uBuckets,
@@ -338,6 +338,23 @@ function scopedBlockHtml(): string {
       ${wins.map((w) => fcWinHtml(esc(w.label), "weekly · this model", w.forecast, null, D7_LEN, "%/day", note)).join("")}
     </div>`;
 }
+// Codex/OMP report windows scoped to one pane, not the account. AgentRateLimit carries no
+// name field, so a row is named from its span; a single reading has no slope behind it,
+// so this is a level and reset time only — never a forecast, matching docs/providers.md.
+function paneLimitsBlockHtml(): string {
+  const s = activeId ? sessions.get(activeId) : null;
+  const wins = s?.rateLimits ?? [];
+  if (!wins.length) return "";
+  const note = "Reported by this pane, not the account. A single reading carries no pace, so this is the level only.";
+  return `<div class="label" style="margin-top:15px">Pane limits <span class="fc-hint">· this pane's own rate-limit windows</span></div>
+    <div class="fc-grid">
+      ${wins.map((w) => {
+        const len = w.windowMins != null ? w.windowMins * 60 : D7_LEN;
+        const name = w.windowMins != null ? fmtSpan(len) : "Usage window";
+        return fcWinHtml(name, "this pane's window", forecastWin(w.usedPercent, w.resetsAt, null, len), null, len, "%/day", note);
+      }).join("")}
+    </div>`;
+}
 export function usagePanelHtml(): string {
   const ranges = USAGE_RANGES.map(([n, l]) => `<button class="u-rbtn${n === usageRange ? " on" : ""}" data-urange="${n}">${l}</button>`).join("");
   return `<div class="u-pane">
@@ -346,6 +363,7 @@ export function usagePanelHtml(): string {
       <div class="u-range">${ranges}</div></header>
     ${uTiles()}
     ${forecastBlockHtml()}
+    ${paneLimitsBlockHtml()}
     ${uHeatmap()}
     <div class="u-cols">${uBars()}<section class="u-card">${uModelMix()}${uTokenMix()}</section></div>
     ${uProjects()}
