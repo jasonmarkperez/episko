@@ -29,7 +29,6 @@
       "session-state",
       "activity",
       "context",
-      "usage",
       "launch-permissions"
     ]
   }

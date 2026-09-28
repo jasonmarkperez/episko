@@ -13,9 +13,9 @@ Markers: `+` new · `~` changed · `!` fixed
 
 ## Unreleased
 
-+ **OMP is now an integrated provider.** Session state, activity, a filling context meter
-  and a running usage/cost total arrive from its own extension system over the same
-  telemetry route Claude and Codex use; approvals stay in the terminal.
++ **OMP is now an integrated provider.** Session state, activity, a filling context
+  meter and a running cost total arrive from its own extension system over the `/agent`
+  telemetry route; approvals stay in the terminal.
 
 ## 0.31.0 — 2026-09-23
 A session row in the sidebar has its own menu, ✕ on a port stops a server nobody else

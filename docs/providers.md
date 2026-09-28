@@ -111,13 +111,16 @@ flag in Rust that TypeScript cannot understand, fails before merge.
 
 ### The instrumented-CLI kind
 
-Claude and Codex each speak a vendor protocol Episko starts as a sidecar. A third
-kind fits providers whose own extension system can carry a per-launch asset: instead
-of a sidecar in `agent.rs`, the launch arm writes a shim through `write_instrument`
-and the CLI reports back over the `/agent` telemetry route. OMP is the first of
-these. It costs a shim asset, a `<vendor>.ts` adapter that turns `ProviderEvent`
-into `AgentEvent`s, a manifest row, a `write_instrument` arm and a `logos.ts` entry
-— no `agent.rs` sidecar branch and no history/resume plumbing unless the vendor's
+Codex speaks a vendor protocol Episko starts as a sidecar. Claude is instrumented
+rather than sidecarred: `write_instrument_settings` writes its `--settings` asset and
+its hooks and statusLine POST to the same telemetry server. A third kind generalizes
+that shape to providers whose own extension system carries the asset: the launch arm
+writes a shim through `write_instrument` and the CLI reports back over the `/agent`
+telemetry route. OMP is the first of these. It costs a shim asset, a `<vendor>.ts`
+adapter that turns `ProviderEvent` into `AgentEvent`s, a manifest row, a
+`write_instrument` arm, a `start_provider` arm in `agent.rs` (without it the launch
+falls through to no arguments and the pane is silently terminal-only), and a
+`logos.ts` entry — no sidecar and no history/resume plumbing unless the vendor's
 extension system exposes a public transcript to read.
 
 ## Pull-request definition of done
