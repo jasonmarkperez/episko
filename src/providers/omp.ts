@@ -2,7 +2,6 @@
 // ./instrument forwards raw payloads; every decision about what they mean lives here.
 
 import type { AgentEvent, AgentFileTouch, ProviderEvent } from "../agents";
-import { readObj } from "../store";
 import type { AgentPermissionMode, AgentTokenBreakdown, Todo, TouchKind } from "../types";
 
 // Ids only; the backend maps each to a whitelist and none is passed through as argv.
@@ -64,34 +63,12 @@ function usageEvent(pane: string): AgentEvent {
   };
 }
 
-// The running $ total, keyed by pane (the launch id every event carries). Persisted because a
-// webview reload (./actions reloadUi) drops this module's state but not the OMP process, so the
-// next message_end must not restart the sum from zero. Capped like `cc-cost-base`'s
-// COST_BASE_MAX (usage.ts): entries are re-inserted on every write via `bumpCost`, so the
-// front of the map is genuinely the least-recently-written pane.
-const COST_KEY = "cc-omp-cost";
-const COST_MAX = 500;
-let paneCost: Map<string, number> | null = null;
-// Lazy: a module-scope read would hit `localStorage` at import time, before a real page
-// (or a test's polyfill) has necessarily set the global.
-function costMap(): Map<string, number> {
-  return paneCost ??= new Map(Object.entries(readObj<number>(COST_KEY))
-    // A value written by an older build (or hand-edited) is discarded on its own: a
-    // non-number here would turn the next sum into string concatenation.
-    .filter(([, v]) => typeof v === "number" && Number.isFinite(v)));
-}
-// Re-inserting moves a pane to the back: a live pane that is merely old is never the front,
-// and a write can never be undone by its own save.
-function bumpCost(pane: string, sum: number) {
-  const map = costMap();
-  map.delete(pane);
-  map.set(pane, sum);
-}
-function saveCost() {
-  const map = costMap();
-  for (const k of [...map.keys()].slice(0, Math.max(0, map.size - COST_MAX))) map.delete(k);
-  localStorage.setItem(COST_KEY, JSON.stringify(Object.fromEntries(map)));
-}
+// The running $ total, keyed by pane. Deliberately NOT persisted: an earlier revision saved
+// this to localStorage so a webview reload wouldn't restart it at 0, but a reload also drops
+// the pane's OMP thread id (session_start never re-fires for an already-running process), so
+// the reducer's cost baseline re-keys and the entire persisted sum got booked into spend a
+// second time. Restarting at 0 on reload — like tokenTotal already does — is correct instead.
+const paneCost = new Map<string, number>();
 
 // The todo tool's result carries the authoritative post-op state; the tool re-normalizes
 // (e.g. auto-promotes the next pending task) after every op, so this is read, not replayed.
@@ -113,8 +90,7 @@ export function ompEvents(event: ProviderEvent): AgentEvent[] {
     case "session_start": {
       tokenTotal.set(pane, ZERO_BREAKDOWN);
       lastContext.delete(pane);
-      bumpCost(pane, 0);
-      saveCost();
+      paneCost.set(pane, 0);
       const out: AgentEvent[] = [{
         type: "thread", id: text(p.sessionId), model: text(p.model), title: text(p.title),
       }];
@@ -176,10 +152,8 @@ export function ompEvents(event: ProviderEvent): AgentEvent[] {
       const out: AgentEvent[] = [usageEvent(pane)];
       const spent = Number(obj(u.cost).total);
       if (Number.isFinite(spent)) {
-        const prevSum = costMap().get(pane) ?? 0;
-        const sum = spent !== 0 ? prevSum + spent : prevSum;
-        // A zero-cost reading changes nothing, so it must not rewrite an identical blob.
-        if (spent !== 0) { bumpCost(pane, sum); saveCost(); }
+        const sum = (paneCost.get(pane) ?? 0) + spent;
+        paneCost.set(pane, sum);
         out.push({ type: "cost", totalUsd: sum });
       }
       return out;
@@ -194,7 +168,7 @@ export function ompEvents(event: ProviderEvent): AgentEvent[] {
     case "auto_retry_start":
       return [{ type: "thread-status", status: "active", waiting: false }];
     case "session_shutdown":
-      lastContext.delete(pane); tokenTotal.delete(pane); costMap().delete(pane); saveCost();
+      lastContext.delete(pane); tokenTotal.delete(pane); paneCost.delete(pane);
       return [{ type: "disconnected" }];
     default:
       return [];

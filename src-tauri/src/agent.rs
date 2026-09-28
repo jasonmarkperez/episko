@@ -842,9 +842,6 @@ pub(crate) fn start_provider(
                     .map(|a| (*a).to_string()),
             );
             args.extend(["--cwd".to_string(), launch.workdir.to_string()]);
-            if let Some(id) = launch.resume {
-                args.extend(["--resume".to_string(), id.to_string()]);
-            }
             Ok(args)
         }
         _ => Ok(Vec::new()),

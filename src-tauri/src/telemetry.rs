@@ -243,6 +243,18 @@ pub(crate) fn write_instrument(
     port: u16,
     session_id: &str,
 ) -> std::io::Result<Vec<String>> {
+    // Pasted into a filename and into an executed TS literal: uuid characters only, so
+    // neither `../` nor a closing quote can reach the filesystem or the interpreter.
+    if session_id.is_empty()
+        || !session_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("not a valid session id: {session_id}"),
+        ));
+    }
     let (template, ext, flag) = match provider {
         "omp" => (
             include_str!("../../src/providers/instrument/omp.ts"),
@@ -1098,5 +1110,21 @@ mod tests {
     #[test]
     fn write_instrument_rejects_unknown_provider() {
         assert!(write_instrument("nope", 45678, "sid").is_err());
+    }
+
+    /// `../` would escape `cc-launcher`; a quote would break out of the shim's TS string
+    /// literal into code the CLI then executes. Both must be rejected, not sanitised.
+    #[test]
+    fn write_instrument_rejects_non_uuid_session_id() {
+        let mut dir = std::env::temp_dir();
+        dir.push("cc-launcher");
+
+        let traversal = "../../evil";
+        assert!(write_instrument("omp", 45678, traversal).is_err());
+        assert!(!dir.join(format!("omp-{traversal}.ts")).exists());
+
+        let quote = "sid\";code();";
+        assert!(write_instrument("omp", 45678, quote).is_err());
+        assert!(!dir.join(format!("omp-{quote}.ts")).exists());
     }
 }

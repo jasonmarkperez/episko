@@ -200,13 +200,13 @@ describe("ompEvents", () => {
     expect(u2 && u2.type === "usage" && u2.usage.total.totalTokens).toBe(180);
   });
 
-  it("keeps the running cost across a reload (module state resets, storage does not)", async () => {
+  it("books cost from zero after a module reset, instead of re-emitting the previous total", async () => {
     ev("session_start", { sessionId: "reload-thread", model: "m", title: "t", context: null }, "reload-pane");
     ev("message_end", { message: { role: "assistant",
       usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 3 } } } }, "reload-pane");
     vi.resetModules();
-    // Dynamic on purpose: reloadUi() drops this module's state, so the test needs a second,
-    // independently-initialized instance sharing only the real localStorage backing.
+    // Dynamic on purpose: reloadUi() drops this module's state; the pane's OMP thread id is
+    // lost with it, so the reducer's baseline re-keys and a persisted sum would double-book.
     const fresh = await import("../src/providers/omp");
     const out = fresh.ompEvents({
       sessionId: "reload-pane", provider: "omp", method: "message_end",
@@ -214,7 +214,7 @@ describe("ompEvents", () => {
         usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 2 } } } },
       requestId: null,
     });
-    expect(out.find((e) => e.type === "cost")).toMatchObject({ totalUsd: 5 });
+    expect(out.find((e) => e.type === "cost")).toMatchObject({ totalUsd: 2 });
   });
 
   it("resets the running cost when a new thread starts in the same pane", () => {
@@ -234,48 +234,5 @@ describe("ompEvents", () => {
 
   it("closes the turn when isTerminal is entirely absent, not just when true", () => {
     expect(ev("agent_end", {})[0]).toMatchObject({ type: "turn-completed" });
-  });
-
-  it("keeps the persisted cost map bounded past its cap", () => {
-    for (let i = 0; i < 505; i++) {
-      ev("session_start", { sessionId: `bound-${i}`, model: "m", title: "t", context: null }, `bound-pane-${i}`);
-      ev("message_end", { message: { role: "assistant",
-        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 1 } } } }, `bound-pane-${i}`);
-    }
-    const saved = JSON.parse(store.get("cc-omp-cost")!);
-    expect(Object.keys(saved).length).toBeLessThanOrEqual(500);
-    expect(saved["bound-pane-504"]).toBe(1);
-  });
-
-  it("does not evict the pane it was just asked to save, even loaded already over the cap", async () => {
-    const seeded: Record<string, number> = {};
-    for (let i = 0; i < 501; i++) seeded[`p${i}`] = 1; // p0 is the oldest/front entry
-    store.set("cc-omp-cost", JSON.stringify(seeded));
-    vi.resetModules();
-    const fresh = await import("../src/providers/omp");
-    const out = fresh.ompEvents({
-      sessionId: "p0", provider: "omp", method: "message_end",
-      params: { message: { role: "assistant",
-        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 2 } } } },
-      requestId: null,
-    });
-    expect(out.find((e) => e.type === "cost")).toMatchObject({ totalUsd: 3 });
-    const saved = JSON.parse(store.get("cc-omp-cost")!);
-    expect(saved["p0"]).toBe(3);
-  });
-
-  it("discards a legacy {tid, sum} cost entry instead of stringifying it", async () => {
-    store.set("cc-omp-cost", JSON.stringify({ "legacy-pane": { tid: "x", sum: 1.23 } }));
-    vi.resetModules();
-    const fresh = await import("../src/providers/omp");
-    const out = fresh.ompEvents({
-      sessionId: "legacy-pane", provider: "omp", method: "message_end",
-      params: { message: { role: "assistant",
-        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.05 } } } },
-      requestId: null,
-    });
-    const cost = out.find((e) => e.type === "cost") as { totalUsd: number };
-    expect(typeof cost.totalUsd).toBe("number");
-    expect(cost.totalUsd).toBeCloseTo(0.05);
   });
 });
